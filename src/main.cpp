@@ -120,13 +120,31 @@ class HelloTriangleApplication {
     VkFormat swapChainImageFormat = {};
     VkExtent2D swapChainExtent = {};
 
-
     std::vector<VkImage> swapChainImages;
+    std::vector<VkImageView> swapChainImageViews;
 
     VkQueue graphicsQueue = nullptr;
     VkQueue presentQueue = nullptr;
 
     SDL_Window *window = nullptr;
+
+    /*
+     * We have to create an instance with enabled required extensions and optional validation layers
+     * We then have to create a surface which as we using an SDL window, SDL provides a useful function for
+     * We then have to find a suitable physical device (GPU) that supports what we need including queue families
+     * We then we have to create a logical device which we use to interface with the physical device which cares about
+     * and uses what we asked our physical device to support
+     * We then have to create the swap chain which is responsible for managing the image buffers
+     */
+    void initVulkan() {
+        createInstance();
+        createSurface();
+        pickPhysicalDevice();
+        createLogicalDevice();
+        createSwapChain();
+        createImageViews();
+        createGraphicsPipeline();
+    }
 
     void createInstance() {
 
@@ -172,17 +190,6 @@ class HelloTriangleApplication {
             throw std::runtime_error("failed to create surface");
         }
         SDL_Log("Surface created");
-    }
-
-    void initWindow() {
-        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
-            SDL_GetError();
-            return;
-        }
-        SDL_SetAppMetadata("Engine", "0.0.1", nullptr);
-        // Hints are configuration variables, there are many more https://wiki.libsdl.org/SDL3/CategoryHints
-        SDL_SetHint(SDL_HINT_EVENT_LOGGING, "1");
-        window = SDL_CreateWindow("Engine", 1980, 1080, SDL_WINDOW_INPUT_FOCUS|SDL_WINDOW_VULKAN);
     }
 
     void pickPhysicalDevice() {
@@ -262,7 +269,7 @@ class HelloTriangleApplication {
         swapChainExtent = chooseSwapExtent(swapChainSupport.capabilities);
         swapChainImageFormat = surfaceFormat.format;
 
-        // How many images in the chain (frame buffers.. I think)
+        // How many images in the chain
         uint32 imageCount = std::clamp(swapChainSupport.capabilities.minImageCount + 1,
             swapChainSupport.capabilities.minImageCount, swapChainSupport.capabilities.maxImageCount);
 
@@ -321,20 +328,38 @@ class HelloTriangleApplication {
         vkGetSwapchainImagesKHR(logicalDevice, swapChain, &imageCount, swapChainImages.data());
     }
 
-    /*
-     * We have to create an instance with enabled required extensions and optional validation layers
-     * We then have to create a surface which as we using an SDL window, SDL provides a useful function for
-     * We then have to find a suitable physical device (GPU) that supports what we need including queue families
-     * We then we have to create a logical device which we use to interface with the physical device which cares about
-     * and uses what we asked our physical device to support
-     * We then have to create the swap chain which involves the frame buffers or where we render images into
-     */
-    void initVulkan() {
-        createInstance();
-        createSurface();
-        pickPhysicalDevice();
-        createLogicalDevice();
-        createSwapChain();
+    void createImageViews() {
+        swapChainImageViews.resize(swapChainImages.size());
+        for (uint32 i = 0; i < swapChainImages.size(); i++) {
+            VkImageViewCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            createInfo.image = swapChainImages[i];
+
+            // Specifies how the image data should be interpreted
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            createInfo.format = swapChainImageFormat;
+
+            // Allows swizzling the colour channels around eg map all channels to the red channel
+            createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+            // Describes the images purpose and which part we want to access
+            createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            createInfo.subresourceRange.baseMipLevel = 0;
+            createInfo.subresourceRange.levelCount = 1;
+            createInfo.subresourceRange.baseArrayLayer = 0;
+            createInfo.subresourceRange.layerCount = 1;
+
+            if (vkCreateImageView(logicalDevice, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create image view");
+            }
+        }
+    }
+
+    void createGraphicsPipeline() {
+
     }
 
     void mainLoop() {
@@ -349,12 +374,26 @@ class HelloTriangleApplication {
         }
     }
 
+    void initWindow() {
+        if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS)) {
+            SDL_GetError();
+            return;
+        }
+        SDL_SetAppMetadata("Engine", "0.0.1", nullptr);
+        // Hints are configuration variables, there are many more https://wiki.libsdl.org/SDL3/CategoryHints
+        SDL_SetHint(SDL_HINT_EVENT_LOGGING, "1");
+        window = SDL_CreateWindow("Engine", 1980, 1080, SDL_WINDOW_INPUT_FOCUS|SDL_WINDOW_VULKAN);
+    }
+
     /*
      * Feels largely pointless and think about removing in actual implementation
      * When we close the application we don't want the user to wait for us to needlessly clean up memory that the OS
      * will handle.
      */
     void cleanup() {
+        for (auto imageView : swapChainImageViews) {
+            vkDestroyImageView(logicalDevice, imageView, nullptr);
+        }
         vkDestroySwapchainKHR(logicalDevice, swapChain, nullptr);
         vkDestroyDevice(logicalDevice, nullptr);
         vkDestroySurfaceKHR(instance, surface, nullptr);
