@@ -6,6 +6,7 @@
 #include <set>
 #include <algorithm>
 #include <limits>
+#include <fstream>
 
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL.h>
@@ -20,6 +21,23 @@ typedef uint16_t uint16;
 typedef uint8_t uint8;
 
 #define global static
+
+// Open the file at the end and seek to the start before reading so we know the exact size for buffer allocation
+static std::vector<char> readFile(const std::string& fileName) {
+    std::ifstream file(fileName, std::ios::ate|std::ios::binary);
+    if (!file.is_open()) {
+        throw std::runtime_error("Could not open file " + fileName);
+    }
+
+    uint64 fileSize = (uint64)file.tellg();
+    std::vector<char> buffer(fileSize);
+
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    file.close();
+
+    return buffer;
+}
 
 /*
  * Likely that present and graphics queues are the same, but we can treat them as separate
@@ -359,7 +377,133 @@ class HelloTriangleApplication {
     }
 
     void createGraphicsPipeline() {
+        auto vertShaderCode = readFile("shaders/compiled/vert.spv");
+        auto fragShaderCode = readFile("shaders/compiled/frag.spv");
 
+        VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
+        VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+
+        VkPipelineShaderStageCreateInfo vertShaderStageCreateInfo{};
+        vertShaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertShaderStageCreateInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        vertShaderStageCreateInfo.module = vertShaderModule;
+        vertShaderStageCreateInfo.pName = "main";
+
+        vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
+        vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
+        // pSpecializationInfo allows for specifying constants at this time which is more performant than at runtime
+
+        VkPipelineShaderStageCreateInfo fragShaderStageCreateInfo{};
+        fragShaderStageCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragShaderStageCreateInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragShaderStageCreateInfo.module = fragShaderModule;
+        fragShaderStageCreateInfo.pName = "main";
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageCreateInfo, fragShaderStageCreateInfo};
+
+        // Very few things can be changed without recreating the entire pipeline. So this means we must provide these
+        // at draw time
+        std::vector<VkDynamicState> dynamicStates = {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR
+        };
+
+        VkPipelineDynamicStateCreateInfo dynamicStateCreateInfo{};
+        dynamicStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicStateCreateInfo.dynamicStateCount = dynamicStates.size();
+        dynamicStateCreateInfo.pDynamicStates = dynamicStates.data();
+
+        // This would be where we define how the vertex data looks and the attributes we are passing to the shader
+        // but initially cheating by specifying vertex data in the shaders directly
+        VkPipelineVertexInputStateCreateInfo vertexInputCreateInfo{};
+        vertexInputCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInputCreateInfo.vertexBindingDescriptionCount = 0;
+        vertexInputCreateInfo.pVertexBindingDescriptions = nullptr;
+        vertexInputCreateInfo.vertexAttributeDescriptionCount = 0;
+        vertexInputCreateInfo.pVertexAttributeDescriptions = nullptr;
+
+        /*
+         * What kind of geometry will be drawn and if primitive restart should be enabled
+         */
+        VkPipelineInputAssemblyStateCreateInfo inputAssemblyCreateInfo{};
+        inputAssemblyCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssemblyCreateInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        inputAssemblyCreateInfo.primitiveRestartEnable = VK_FALSE;
+
+        // VkViewport viewport{};
+        // viewport.x = 0.0f;
+        // viewport.y = 0.0f;
+        // viewport.width = (float)swapChainExtent.width;
+        // viewport.height = (float)swapChainExtent.height;
+        // viewport.minDepth = 0.0f;
+        // viewport.maxDepth = 1.0f;
+        //
+        // // Pixels outside the scissor will be discarded, so as we are doing nothing special
+        // // it should cover the framebuffer
+        // VkRect2D scissor{};
+        // scissor.offset = {0, 0};
+        // scissor.extent = swapChainExtent;
+
+        // As we are defining them dynamically at drawtime, we only specify their count. The code above would be for
+        // specifying them statically now but then to change them we would need to recreate the pipeline
+        VkPipelineViewportStateCreateInfo viewportStateCreateInfo{};
+        viewportStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportStateCreateInfo.viewportCount = 1;
+        viewportStateCreateInfo.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rasterizerCreateInfo{};
+        rasterizerCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rasterizerCreateInfo.depthClampEnable = VK_FALSE;
+
+        // Setting this to true doesn't let anything through this stage
+        rasterizerCreateInfo.rasterizerDiscardEnable = VK_FALSE;
+
+        /*
+         * FILL fills polygon with fragments
+         * LINE edges are drawn as lines
+         * POINT vertices are drawn as points
+         */
+        rasterizerCreateInfo.polygonMode = VK_POLYGON_MODE_FILL;
+        rasterizerCreateInfo.lineWidth = 1.0f;
+
+        // Do we cull faces and which do we consider front facing
+        rasterizerCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizerCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+        // Can alter the depth values by adding a constant or biasing based on slope
+        rasterizerCreateInfo.depthBiasEnable = VK_FALSE;
+        rasterizerCreateInfo.depthBiasConstantFactor = 0.0f;
+        rasterizerCreateInfo.depthBiasClamp = 0.0f;
+        rasterizerCreateInfo.depthBiasSlopeFactor = 0.0f;
+
+        // Disable multisampling for now
+        VkPipelineMultisampleStateCreateInfo multisampleCreateInfo{};
+        multisampleCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampleCreateInfo.sampleShadingEnable = VK_FALSE;
+        multisampleCreateInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        multisampleCreateInfo.minSampleShading = 1.0f;
+        multisampleCreateInfo.pSampleMask = nullptr;
+        multisampleCreateInfo.alphaToCoverageEnable = VK_FALSE;
+        multisampleCreateInfo.alphaToOneEnable = VK_FALSE;
+
+        // Depth and stencil testing createinfo would be here
+
+        // Disable colour blending for now. Colour blending controls how the new color from the fragment shader
+        // interacts with the colour currently in the framebuffer
+        VkPipelineColorBlendAttachmentState colorBlendAttachmentState{};
+        colorBlendAttachmentState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+        | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachmentState.blendEnable = VK_FALSE;
+        colorBlendAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        colorBlendAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+        colorBlendAttachmentState.colorBlendOp = VK_BLEND_OP_ADD;
+        colorBlendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        colorBlendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        colorBlendAttachmentState.alphaBlendOp = VK_BLEND_OP_ADD;
+
+
+        vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
+        vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
     }
 
     void mainLoop() {
@@ -498,6 +642,7 @@ class HelloTriangleApplication {
         }
         return availableFormats[0];
     }
+
     /*
      * Available are:
      * VK_PRESENT_MODE_IMMEDIATE_KHR which displays instantly and cause tearing
@@ -536,6 +681,19 @@ class HelloTriangleApplication {
         actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
 
         return actualExtent;
+    }
+
+    VkShaderModule createShaderModule(const std::vector<char>& code) {
+        VkShaderModuleCreateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = code.size();
+        createInfo.pCode = reinterpret_cast<const uint32*>(code.data());
+
+        VkShaderModule shaderModule = nullptr;
+        if (vkCreateShaderModule(logicalDevice, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+            throw std::runtime_error("Could not create shader module!");
+        }
+        return shaderModule;
     }
 };
 
