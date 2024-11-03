@@ -120,7 +120,7 @@ int runSDL2Program() {
     return 0;
 }
 
-class HelloTriangleApplication {
+class FirstVulkanTriangleApplication {
     public:
     void run() {
         initWindow();
@@ -137,6 +137,10 @@ class HelloTriangleApplication {
     VkSwapchainKHR swapChain = nullptr;
     VkFormat swapChainImageFormat = {};
     VkExtent2D swapChainExtent = {};
+
+    VkRenderPass renderPass = nullptr;
+    VkPipelineLayout pipelineLayout = {};
+    VkPipeline graphicsPipeline = nullptr;
 
     std::vector<VkImage> swapChainImages;
     std::vector<VkImageView> swapChainImageViews;
@@ -161,6 +165,7 @@ class HelloTriangleApplication {
         createLogicalDevice();
         createSwapChain();
         createImageViews();
+        createRenderPass();
         createGraphicsPipeline();
     }
 
@@ -376,9 +381,48 @@ class HelloTriangleApplication {
         }
     }
 
+    void createRenderPass() {
+        VkAttachmentDescription colorAttachment{};
+        colorAttachment.format = swapChainImageFormat;
+        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+
+        // What to do with colour and depth data
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        // What to do with the stencil buffer
+        colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+
+        colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+        VkAttachmentReference colorAttachmentReference{};
+        colorAttachmentReference.attachment = 0;
+        colorAttachmentReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorAttachmentReference;
+
+        VkRenderPassCreateInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        renderPassInfo.attachmentCount = 1;
+        renderPassInfo.pAttachments = &colorAttachment;
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+
+        if (vkCreateRenderPass(logicalDevice, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create render pass");
+        }
+
+        SDL_Log("Render pass created");
+    }
+
     void createGraphicsPipeline() {
-        auto vertShaderCode = readFile("shaders/compiled/vert.spv");
-        auto fragShaderCode = readFile("shaders/compiled/frag.spv");
+        auto vertShaderCode = readFile("../shaders/compiled/vert.spv");
+        auto fragShaderCode = readFile("../shaders/compiled/frag.spv");
 
         VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
         VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -388,9 +432,6 @@ class HelloTriangleApplication {
         vertShaderStageCreateInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
         vertShaderStageCreateInfo.module = vertShaderModule;
         vertShaderStageCreateInfo.pName = "main";
-
-        vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
-        vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
         // pSpecializationInfo allows for specifying constants at this time which is more performant than at runtime
 
         VkPipelineShaderStageCreateInfo fragShaderStageCreateInfo{};
@@ -501,6 +542,59 @@ class HelloTriangleApplication {
         colorBlendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
         colorBlendAttachmentState.alphaBlendOp = VK_BLEND_OP_ADD;
 
+        VkPipelineColorBlendStateCreateInfo colorBlendStateCreateInfo{};
+        colorBlendStateCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlendStateCreateInfo.logicOpEnable = VK_FALSE;
+        colorBlendStateCreateInfo.logicOp = VK_LOGIC_OP_COPY;
+        colorBlendStateCreateInfo.attachmentCount = 1;
+        colorBlendStateCreateInfo.pAttachments = &colorBlendAttachmentState;
+        colorBlendStateCreateInfo.blendConstants[0] = 0.0f;
+        colorBlendStateCreateInfo.blendConstants[1] = 0.0f;
+        colorBlendStateCreateInfo.blendConstants[2] = 0.0f;
+        colorBlendStateCreateInfo.blendConstants[3] = 0.0f;
+
+        // VK Pipeline is where we specify uniform shader values. Empty for now
+        VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
+        pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutCreateInfo.setLayoutCount = 0;
+        pipelineLayoutCreateInfo.pSetLayouts = nullptr;
+        pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
+        pipelineLayoutCreateInfo.pPushConstantRanges = nullptr;
+
+        if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create pipeline layout!");
+        }
+
+        VkGraphicsPipelineCreateInfo pipelineCreateInfo{};
+        pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineCreateInfo.stageCount = 2;
+        pipelineCreateInfo.pStages = shaderStages;
+
+        pipelineCreateInfo.pVertexInputState = &vertexInputCreateInfo;
+        pipelineCreateInfo.pInputAssemblyState = &inputAssemblyCreateInfo;
+        pipelineCreateInfo.pViewportState = &viewportStateCreateInfo;
+        pipelineCreateInfo.pRasterizationState = &rasterizerCreateInfo;
+        pipelineCreateInfo.pMultisampleState = &multisampleCreateInfo;
+        pipelineCreateInfo.pDepthStencilState = nullptr;
+        pipelineCreateInfo.pColorBlendState = &colorBlendStateCreateInfo;
+        pipelineCreateInfo.pDynamicState = &dynamicStateCreateInfo;
+
+        pipelineCreateInfo.layout = pipelineLayout;
+
+        pipelineCreateInfo.renderPass = renderPass;
+        pipelineCreateInfo.subpass = 0;
+
+        // We can create a new graphics pipeline by deriving it from an existing one. There is currently one pipeline
+        // so specify invalid index. This would also require VK_PIPELINE_CREATE_DERIVATIVE_BIT flag
+        pipelineCreateInfo.basePipelineHandle = nullptr;
+        pipelineCreateInfo.basePipelineIndex = -1;
+
+        if (vkCreateGraphicsPipelines(logicalDevice, nullptr, 1, &pipelineCreateInfo,
+            nullptr, &graphicsPipeline) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create graphics pipeline!");
+        }
+
+        SDL_Log("Created graphics pipeline");
 
         vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
         vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
@@ -535,6 +629,9 @@ class HelloTriangleApplication {
      * will handle.
      */
     void cleanup() {
+        vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
+        vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+        vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
         for (auto imageView : swapChainImageViews) {
             vkDestroyImageView(logicalDevice, imageView, nullptr);
         }
@@ -699,7 +796,7 @@ class HelloTriangleApplication {
 
 // Entry point for SDL3 with header inclusion
 int main(int argc, char **argv) {
-    HelloTriangleApplication app;
+    FirstVulkanTriangleApplication app;
 
     try {
         app.run();
