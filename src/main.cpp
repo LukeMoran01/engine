@@ -138,15 +138,23 @@ class FirstVulkanTriangleApplication {
     VkFormat swapChainImageFormat = {};
     VkExtent2D swapChainExtent = {};
 
+    VkQueue graphicsQueue = nullptr;
+    VkQueue presentQueue = nullptr;
+
     VkRenderPass renderPass = nullptr;
     VkPipelineLayout pipelineLayout = {};
     VkPipeline graphicsPipeline = nullptr;
 
     std::vector<VkImage> swapChainImages;
     std::vector<VkImageView> swapChainImageViews;
+    std::vector<VkFramebuffer> swapChainFramebuffers;
 
-    VkQueue graphicsQueue = nullptr;
-    VkQueue presentQueue = nullptr;
+    VkCommandPool commandPool = nullptr;
+    VkCommandBuffer commandBuffer = nullptr;
+
+    VkSemaphore imageAvailableSemaphore = nullptr;
+    VkSemaphore renderFinishedSemaphore = nullptr;
+    VkFence inFlightFence = nullptr;
 
     SDL_Window *window = nullptr;
 
@@ -167,6 +175,10 @@ class FirstVulkanTriangleApplication {
         createImageViews();
         createRenderPass();
         createGraphicsPipeline();
+        createFramebuffers();
+        createCommandPool();
+        createCommandBuffer();
+        createSyncObjects();
     }
 
     void createInstance() {
@@ -406,12 +418,22 @@ class FirstVulkanTriangleApplication {
         subpass.colorAttachmentCount = 1;
         subpass.pColorAttachments = &colorAttachmentReference;
 
+        VkSubpassDependency subpassDependency{};
+        subpassDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        subpassDependency.dstSubpass = 0;
+        subpassDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassDependency.srcAccessMask = 0;
+        subpassDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        subpassDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
         VkRenderPassCreateInfo renderPassInfo{};
         renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         renderPassInfo.attachmentCount = 1;
         renderPassInfo.pAttachments = &colorAttachment;
         renderPassInfo.subpassCount = 1;
         renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = 1;
+        renderPassInfo.pDependencies = &subpassDependency;
 
         if (vkCreateRenderPass(logicalDevice, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
             throw std::runtime_error("failed to create render pass");
@@ -561,8 +583,9 @@ class FirstVulkanTriangleApplication {
         pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
         pipelineLayoutCreateInfo.pPushConstantRanges = nullptr;
 
-        if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create pipeline layout!");
+        if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutCreateInfo, nullptr,
+            &pipelineLayout) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create pipeline layout");
         }
 
         VkGraphicsPipelineCreateInfo pipelineCreateInfo{};
@@ -591,13 +614,190 @@ class FirstVulkanTriangleApplication {
 
         if (vkCreateGraphicsPipelines(logicalDevice, nullptr, 1, &pipelineCreateInfo,
             nullptr, &graphicsPipeline) != VK_SUCCESS) {
-            throw std::runtime_error("failed to create graphics pipeline!");
+            throw std::runtime_error("failed to create graphics pipeline");
         }
 
-        SDL_Log("Created graphics pipeline");
+        SDL_Log("Graphics pipeline created");
 
         vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
         vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
+    }
+
+    void createFramebuffers() {
+        swapChainFramebuffers.resize(swapChainImageViews.size());
+        for (uint64 i = 0; i < swapChainImageViews.size(); i++) {
+            VkImageView attachments[] = {swapChainImageViews[i]};
+
+            VkFramebufferCreateInfo framebufferCreateInfo{};
+            framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            framebufferCreateInfo.renderPass = renderPass;
+            framebufferCreateInfo.attachmentCount = 1;
+            framebufferCreateInfo.pAttachments = attachments;
+            framebufferCreateInfo.width = swapChainExtent.width;
+            framebufferCreateInfo.height = swapChainExtent.height;
+            framebufferCreateInfo.layers = 1;
+
+            if (vkCreateFramebuffer(logicalDevice, &framebufferCreateInfo, nullptr,
+                &swapChainFramebuffers[i]) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create framebuffer");
+            }
+        }
+
+        SDL_Log("Framebuffers created");
+    }
+
+    /*
+     * Command buffers are executed on one device queue like graphics or presentation
+     * Each command pool can only allocate to a single type of queue - we have chosen graphics queue family here to draw
+     */
+    void createCommandPool() {
+        QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+
+        VkCommandPoolCreateInfo commandPoolCreateInfo{};
+        commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+
+        if (vkCreateCommandPool(logicalDevice, &commandPoolCreateInfo, nullptr, &commandPool) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create command pool");
+        }
+
+        SDL_Log("Command pool created");
+    }
+
+    void createCommandBuffer() {
+        VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
+        commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        commandBufferAllocateInfo.commandPool = commandPool;
+        commandBufferAllocateInfo.commandBufferCount = 1;
+
+        if (vkAllocateCommandBuffers(logicalDevice, &commandBufferAllocateInfo, &commandBuffer) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create command buffers");
+        }
+
+        SDL_Log("Command buffers created");
+    }
+
+    void createSyncObjects() {
+        VkSemaphoreCreateInfo semaphoreCreateInfo{};
+        semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+        // We create the fence in a signaled state so we don't wait infinitely on the first frame
+        VkFenceCreateInfo fenceCreateInfo{};
+        fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+        if ((vkCreateSemaphore(logicalDevice, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS)
+            || (vkCreateSemaphore(logicalDevice, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS)
+            || (vkCreateFence(logicalDevice, &fenceCreateInfo, nullptr, &inFlightFence) != VK_SUCCESS)) {
+            throw std::runtime_error("failed to sync objects");
+        }
+
+        SDL_Log("Sync objects created");
+    }
+
+    void recordCommandBuffer(VkCommandBuffer commandBuffer, uint32 imageIndex) {
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = 0;
+        beginInfo.pInheritanceInfo = nullptr;
+
+        if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+            throw std::runtime_error("failed to start recording command buffer");
+        }
+
+        SDL_Log("Command buffer recording started");
+
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = renderPass;
+        renderPassInfo.framebuffer = swapChainFramebuffers[imageIndex];
+
+        renderPassInfo.renderArea.offset = {0, 0};
+        renderPassInfo.renderArea.extent = swapChainExtent;
+
+        VkClearValue clearColorValue = {{{ 0.0f, 0.0f, 0.0f, 1.0f }}};
+        renderPassInfo.clearValueCount = 1;
+        renderPassInfo.pClearValues = &clearColorValue;
+
+        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+        // Because we set viewport and scissor to be dynamic we have to specify them here
+        VkViewport viewport{};
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = (float)swapChainExtent.width;
+        viewport.height = (float)swapChainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+        vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+        VkRect2D scissor{};
+        scissor.offset = {0,0};
+        scissor.extent = swapChainExtent;
+        vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+        // ISSUE THE DRAW COMMAND!
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+        vkCmdEndRenderPass(commandBuffer);
+
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+            throw std::runtime_error("failed to record command buffer");
+        }
+
+        SDL_Log("Command buffer recording finished");
+    }
+
+    void drawFrame() {
+        vkWaitForFences(logicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+        vkResetFences(logicalDevice, 1, &inFlightFence);
+
+        uint32 imageIndex = 0;
+        vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX, imageAvailableSemaphore, nullptr,
+            &imageIndex);
+
+        vkResetCommandBuffer(commandBuffer, 0);
+        recordCommandBuffer(commandBuffer, imageIndex);
+
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        VkSemaphore waitSemaphores[] = {imageAvailableSemaphore};
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+
+        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+            throw std::runtime_error("failed to submit draw command buffer");
+        }
+
+        SDL_Log("Draw command buffer submitted");
+
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = signalSemaphores;
+
+        VkSwapchainKHR swapChains[] = {swapChain};
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapChains;
+        presentInfo.pImageIndices = &imageIndex;
+        presentInfo.pResults = nullptr;
+
+        // Present our triangle to the screen!
+        vkQueuePresentKHR(presentQueue, &presentInfo);
     }
 
     void mainLoop() {
@@ -609,6 +809,7 @@ class FirstVulkanTriangleApplication {
                     case SDL_EVENT_QUIT: RUNNING = false; break;
                 }
             }
+            drawFrame();
         }
     }
 
@@ -629,6 +830,13 @@ class FirstVulkanTriangleApplication {
      * will handle.
      */
     void cleanup() {
+        vkDestroySemaphore(logicalDevice, imageAvailableSemaphore, nullptr);
+        vkDestroySemaphore(logicalDevice, renderFinishedSemaphore, nullptr);
+        vkDestroyFence(logicalDevice, inFlightFence, nullptr);
+        vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
+        for (auto framebuffer : swapChainFramebuffers) {
+            vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
+        }
         vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
         vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
@@ -672,7 +880,8 @@ class FirstVulkanTriangleApplication {
         vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, nullptr);
 
         std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount, queueFamilies.data());
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &queueFamilyCount,
+            queueFamilies.data());
 
         int i = 0;
         for (const auto& queueFamily : queueFamilies) {
@@ -697,7 +906,8 @@ class FirstVulkanTriangleApplication {
         vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, nullptr);
 
         std::vector<VkExtensionProperties> availableExtensions(extensionCount);
-        vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount, availableExtensions.data());
+        vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &extensionCount,
+            availableExtensions.data());
 
         std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
         for (const auto& extension : availableExtensions) {
@@ -716,14 +926,16 @@ class FirstVulkanTriangleApplication {
         vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
         if (formatCount != 0) {
             details.formats.resize(formatCount);
-            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, details.formats.data());
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount,
+                details.formats.data());
         }
 
         uint32 presentModeCount;
         vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, nullptr);
         if (presentModeCount != 0) {
             details.presentModes.resize(presentModeCount);
-            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, details.presentModes.data());
+            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount,
+                details.presentModes.data());
         }
 
         return details;
@@ -774,8 +986,10 @@ class FirstVulkanTriangleApplication {
             (uint32)height,
         };
 
-        actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-        actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+        actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width,
+            capabilities.maxImageExtent.width);
+        actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height,
+            capabilities.maxImageExtent.height);
 
         return actualExtent;
     }
@@ -788,7 +1002,7 @@ class FirstVulkanTriangleApplication {
 
         VkShaderModule shaderModule = nullptr;
         if (vkCreateShaderModule(logicalDevice, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-            throw std::runtime_error("Could not create shader module!");
+            throw std::runtime_error("Could not create shader module");
         }
         return shaderModule;
     }
