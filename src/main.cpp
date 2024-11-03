@@ -493,20 +493,6 @@ class FirstVulkanTriangleApplication {
         inputAssemblyCreateInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         inputAssemblyCreateInfo.primitiveRestartEnable = VK_FALSE;
 
-        // VkViewport viewport{};
-        // viewport.x = 0.0f;
-        // viewport.y = 0.0f;
-        // viewport.width = (float)swapChainExtent.width;
-        // viewport.height = (float)swapChainExtent.height;
-        // viewport.minDepth = 0.0f;
-        // viewport.maxDepth = 1.0f;
-        //
-        // // Pixels outside the scissor will be discarded, so as we are doing nothing special
-        // // it should cover the framebuffer
-        // VkRect2D scissor{};
-        // scissor.offset = {0, 0};
-        // scissor.extent = swapChainExtent;
-
         // As we are defining them dynamically at drawtime, we only specify their count. The code above would be for
         // specifying them statically now but then to change them we would need to recreate the pipeline
         VkPipelineViewportStateCreateInfo viewportStateCreateInfo{};
@@ -821,7 +807,7 @@ class FirstVulkanTriangleApplication {
         SDL_SetAppMetadata("Engine", "0.0.1", nullptr);
         // Hints are configuration variables, there are many more https://wiki.libsdl.org/SDL3/CategoryHints
         SDL_SetHint(SDL_HINT_EVENT_LOGGING, "1");
-        window = SDL_CreateWindow("Engine", 1980, 1080, SDL_WINDOW_INPUT_FOCUS|SDL_WINDOW_VULKAN);
+        window = SDL_CreateWindow("Engine", 1920, 1080, SDL_WINDOW_INPUT_FOCUS|SDL_WINDOW_VULKAN);
     }
 
     /*
