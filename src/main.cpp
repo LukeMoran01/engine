@@ -13,6 +13,8 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include <glm/glm.hpp>
+
 #include <vulkan/vulkan.h>
 
 typedef uint64_t uint64;
@@ -21,6 +23,45 @@ typedef uint16_t uint16;
 typedef uint8_t uint8;
 
 #define global static
+
+struct Vertex {
+    glm::vec2 position;
+    glm::vec3 color;
+
+    static VkVertexInputBindingDescription getBindingDescription() {
+        VkVertexInputBindingDescription bindingDescription{};
+        // Vertex data packed together into one array - so one binding and this is the index
+        bindingDescription.binding = 0;
+        bindingDescription.stride = sizeof(Vertex);
+        // Vertex or Instance rendering - we use vertex
+        bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+        return bindingDescription;
+    }
+
+    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+        attributeDescriptions[0].binding = 0;
+        // Which location in the vertex shader, 0 = position
+        attributeDescriptions[0].location = 0;
+        // Confusingly uses colour format but really means vector of 2 32 bit floats
+        attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+        // Where to start reading from
+        attributeDescriptions[0].offset = offsetof(Vertex, position);
+
+        attributeDescriptions[1].binding = 0;
+        attributeDescriptions[1].location = 1;
+        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[1].offset = offsetof(Vertex, color);
+        return attributeDescriptions;
+    }
+};
+
+const std::vector<Vertex> vertices = {
+    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+};
 
 const uint8 MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -152,9 +193,12 @@ class FirstVulkanTriangleApplication {
         std::vector<VkImageView> swapChainImageViews;
         std::vector<VkFramebuffer> swapChainFramebuffers;
 
-        VkCommandPool commandPool = nullptr;
+        VkBuffer vertexBuffer = nullptr;
+        VkDeviceMemory vertexBufferMemory = nullptr;
 
+        VkCommandPool commandPool = nullptr;
         std::vector<VkCommandBuffer> commandBuffers;
+
         std::vector<VkSemaphore> imageAvailableSemaphores;
         std::vector<VkSemaphore> renderFinishedSemaphores;
         std::vector<VkFence> inFlightFences;
@@ -184,6 +228,7 @@ class FirstVulkanTriangleApplication {
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
+            createVertexBuffer();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -485,12 +530,15 @@ class FirstVulkanTriangleApplication {
 
             // This would be where we define how the vertex data looks and the attributes we are passing to the shader
             // but initially cheating by specifying vertex data in the shaders directly
+            auto bindingDescription = Vertex::getBindingDescription();
+            auto attributeDescriptions = Vertex::getAttributeDescriptions();
+
             VkPipelineVertexInputStateCreateInfo vertexInputCreateInfo{};
             vertexInputCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-            vertexInputCreateInfo.vertexBindingDescriptionCount = 0;
-            vertexInputCreateInfo.pVertexBindingDescriptions = nullptr;
-            vertexInputCreateInfo.vertexAttributeDescriptionCount = 0;
-            vertexInputCreateInfo.pVertexAttributeDescriptions = nullptr;
+            vertexInputCreateInfo.vertexBindingDescriptionCount = 1;
+            vertexInputCreateInfo.pVertexBindingDescriptions = &bindingDescription;
+            vertexInputCreateInfo.vertexAttributeDescriptionCount = attributeDescriptions.size();
+            vertexInputCreateInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
             /*
              * What kind of geometry will be drawn and if primitive restart should be enabled
@@ -658,6 +706,53 @@ class FirstVulkanTriangleApplication {
             SDL_Log("Command pool created");
         }
 
+        void createVertexBuffer() {
+            VkBufferCreateInfo bufferCreateInfo{};
+            bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufferCreateInfo.size = sizeof(vertices[0]) * vertices.size();
+            bufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+            bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+            if (vkCreateBuffer(logicalDevice, &bufferCreateInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create vertex buffer");
+            }
+            SDL_Log("Vertex buffer created");
+
+            VkMemoryRequirements memoryRequirements;
+            vkGetBufferMemoryRequirements(logicalDevice, vertexBuffer, &memoryRequirements);
+
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize = memoryRequirements.size;
+            allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+            if (vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
+                throw std::runtime_error("failed to allocate vertex buffer memory");
+            }
+
+            // The final argument is the offset in this block of memory, because this was created specifically for this
+            // we start at the start
+            vkBindBufferMemory(logicalDevice, vertexBuffer, vertexBufferMemory, 0);
+            SDL_Log("Vertex buffer memory allocated and bound");
+
+            // Now we have to copy the vertex data to the buffer
+            void* mappedMemory;
+            /*  This maps the buffer memory to CPU accessible memory, copy the data and unmap
+             *  Of note, the data may not be copied immediately into the buffer memory and also the writes to the buffer
+             *  may not be visible in the mapped memory yet. There are two solutions:
+             *      Use VK_MEMORY_PROPERTY_HOST_COHERENT_BIT as we did or
+             *      call a vk function to flush memory ranges after writing and a vk function to invalidate ranges
+             *      before reading
+             *  The bit way can may/maybe not affect performance?
+             *  Also, this still does not guarantee the data is visible on the GPU yet. All we are guaranteed is that it
+             *  will be completed before the next call to vkQueueSubmit
+             */
+            vkMapMemory(logicalDevice, vertexBufferMemory, 0, bufferCreateInfo.size, 0, &mappedMemory);
+            memcpy(mappedMemory, vertices.data(), bufferCreateInfo.size);
+            vkUnmapMemory(logicalDevice, vertexBufferMemory);
+        }
+
         void createCommandBuffers() {
             commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
             VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
@@ -741,8 +836,14 @@ class FirstVulkanTriangleApplication {
             scissor.extent = swapChainExtent;
             vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+            VkBuffer vertexBuffers[] = {vertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
             // ISSUE THE DRAW COMMAND!
-            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+            vkCmdDraw(commandBuffer, vertices.size(), 1, 0, 0);
 
             vkCmdEndRenderPass(commandBuffer);
 
@@ -890,6 +991,9 @@ class FirstVulkanTriangleApplication {
          */
         void cleanup() {
             cleanupSwapChain();
+
+            vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
+            vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
 
             vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
             vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
@@ -1065,6 +1169,22 @@ class FirstVulkanTriangleApplication {
                 throw std::runtime_error("Could not create shader module");
             }
             return shaderModule;
+        }
+
+        /*
+        * This seems crazy. We need to get passed different types of memory available and check that one matches the
+        * requirements we need for our operation...
+        */
+        uint32 findMemoryType(uint32 typeFilter, VkMemoryPropertyFlags properties) {
+            VkPhysicalDeviceMemoryProperties memoryProperties;
+            vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+            for (uint32 i = 0; i < memoryProperties.memoryTypeCount; i++) {
+                if ((typeFilter & (1 << i)) && (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+                    SDL_Log("Found valid memory type");
+                    return i;
+                }
+            }
+            throw std::runtime_error("failed to find a suitable memory type");
         }
 };
 
