@@ -7,12 +7,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # SDL3 path configuration
 if(WIN32)
     set(SDL3_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL3/lib/x64/SDL3.lib")
+    set(CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL3")
+    set(SDL3_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL3/include")
+else ()
+    set(GLM_INCLUDE_DIR "/opt/homebrew/Cellar/glm/1.0.1/include/glm")
+
+    set(SDL3_LIBRARY "/usr/local/lib/libSDL3.dylib")
+    set(SDL3_INCLUDE_DIR "/usr/local/include/SDL3")
 endif()
 
-set(CMAKE_PREFIX_PATH "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL3")
-set(SDL3_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL3/include")
 
-set(GLM_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/glm")
 
 # Your executable
 add_executable(${PROJECT_NAME}
@@ -27,6 +31,7 @@ if(WIN32)
             "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL3/bin/SDL3.dll"
             $<TARGET_FILE_DIR:${PROJECT_NAME}>
     )
+    set(GLM_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/glm")
 endif()
 
 find_package(Vulkan REQUIRED)
@@ -38,7 +43,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Vulkan::Vulkan)
 target_include_directories(${PROJECT_NAME} PRIVATE
         ${SDL3_INCLUDE_DIR}
         Vulkan::Vulkan
-        glm::glm
+        ${GLM_INCLUDE_DIR}
         "src"
 )
 
