@@ -249,8 +249,20 @@ class FirstVulkanTriangleApplication {
             // page 45 for MACOS error handling and see zig project that successfully created vk instance
             uint32 sdlExtensionCount;
             const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-            createInfo.enabledExtensionCount = sdlExtensionCount;
-            createInfo.ppEnabledExtensionNames = sdlExtensions;
+
+            std::vector<const char*> allExtensions;
+            allExtensions.reserve(sdlExtensionCount);
+            for (uint32 i = 0; i < sdlExtensionCount; i++) {
+                allExtensions.push_back(sdlExtensions[i]);
+            }
+
+            #if TARGET_OS_MAC
+            allExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+            createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+            #endif
+
+            createInfo.enabledExtensionCount = allExtensions.size();
+            createInfo.ppEnabledExtensionNames = allExtensions.data();
 
             if (enableValidationLayers) {
                 SDL_Log("Validation layers enabled");
@@ -1033,8 +1045,7 @@ class FirstVulkanTriangleApplication {
                 swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
             }
 
-            return deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU
-                && deviceFeatures.geometryShader && indices.isComplete() && extensionSupported && swapChainAdequate;
+            return indices.isComplete() && extensionSupported && swapChainAdequate;
         }
 
         QueueFamilyIndices findQueueFamilies(VkPhysicalDevice physicalDevice) {
