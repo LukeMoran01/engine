@@ -84,6 +84,7 @@ static std::vector<char> readFile(const std::string& fileName) {
 
 /*
  * Likely that present and graphics queues are the same, but we can treat them as separate
+ * TODO: Page 158 Outlines using a separate queue for transfer
  */
 struct QueueFamilyIndices {
     std::optional<uint32> graphicsFamily;
@@ -256,10 +257,10 @@ class FirstVulkanTriangleApplication {
                 allExtensions.push_back(sdlExtensions[i]);
             }
 
-            #if TARGET_OS_MAC
+#if TARGET_OS_MAC
             allExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
             createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
-            #endif
+#endif
 
             createInfo.enabledExtensionCount = allExtensions.size();
             createInfo.ppEnabledExtensionNames = allExtensions.data();
@@ -719,34 +720,13 @@ class FirstVulkanTriangleApplication {
         }
 
         void createVertexBuffer() {
-            VkBufferCreateInfo bufferCreateInfo{};
-            bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bufferCreateInfo.size = sizeof(vertices[0]) * vertices.size();
-            bufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-            bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-            if (vkCreateBuffer(logicalDevice, &bufferCreateInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
-                throw std::runtime_error("failed to create vertex buffer");
-            }
-            SDL_Log("Vertex buffer created");
-
-            VkMemoryRequirements memoryRequirements;
-            vkGetBufferMemoryRequirements(logicalDevice, vertexBuffer, &memoryRequirements);
-
-            VkMemoryAllocateInfo allocInfo{};
-            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            allocInfo.allocationSize = memoryRequirements.size;
-            allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-            if (vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS) {
-                throw std::runtime_error("failed to allocate vertex buffer memory");
-            }
-
-            // The final argument is the offset in this block of memory, because this was created specifically for this
-            // we start at the start
-            vkBindBufferMemory(logicalDevice, vertexBuffer, vertexBufferMemory, 0);
-            SDL_Log("Vertex buffer memory allocated and bound");
+            VkBuffer stagingBuffer;
+            VkDeviceMemory stagingBufferMemory = nullptr;
+            createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                         stagingBuffer, stagingBufferMemory);
 
             // Now we have to copy the vertex data to the buffer
             void* mappedMemory;
@@ -760,9 +740,17 @@ class FirstVulkanTriangleApplication {
              *  Also, this still does not guarantee the data is visible on the GPU yet. All we are guaranteed is that it
              *  will be completed before the next call to vkQueueSubmit
              */
-            vkMapMemory(logicalDevice, vertexBufferMemory, 0, bufferCreateInfo.size, 0, &mappedMemory);
-            memcpy(mappedMemory, vertices.data(), bufferCreateInfo.size);
-            vkUnmapMemory(logicalDevice, vertexBufferMemory);
+            vkMapMemory(logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &mappedMemory);
+            memcpy(mappedMemory, vertices.data(), bufferSize);
+            vkUnmapMemory(logicalDevice, stagingBufferMemory);
+
+            createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
+
+            copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+
+            vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
+            vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
         }
 
         void createCommandBuffers() {
@@ -1190,12 +1178,82 @@ class FirstVulkanTriangleApplication {
             VkPhysicalDeviceMemoryProperties memoryProperties;
             vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
             for (uint32 i = 0; i < memoryProperties.memoryTypeCount; i++) {
-                if ((typeFilter & (1 << i)) && (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+                if ((typeFilter & (1 << i)) && (memoryProperties.memoryTypes[i].propertyFlags & properties) ==
+                    properties) {
                     SDL_Log("Found valid memory type");
                     return i;
                 }
             }
             throw std::runtime_error("failed to find a suitable memory type");
+        }
+
+        // TODO: Stop allocating for each buffer as we will hit the limit in a normal application. Instead implement
+        // an allocator or use VulkanMemoryALlocator library (do it ourself)
+        void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
+                          VkBuffer& buffer, VkDeviceMemory& bufferMemory) {
+            VkBufferCreateInfo bufferCreateInfo{};
+            bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bufferCreateInfo.size = size;
+            bufferCreateInfo.usage = usage;
+            bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+            if (vkCreateBuffer(logicalDevice, &bufferCreateInfo, nullptr, &buffer) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create buffer");
+            }
+            SDL_Log("Buffer created");
+
+            VkMemoryRequirements memoryRequirements;
+            vkGetBufferMemoryRequirements(logicalDevice, buffer, &memoryRequirements);
+
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize = memoryRequirements.size;
+            allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits,
+                                                       properties);
+
+            if (vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+                throw std::runtime_error("failed to allocate buffer memory");
+            }
+
+            // The final argument is the offset in this block of memory, because this was created specifically for this
+            // we start at the start
+            vkBindBufferMemory(logicalDevice, buffer, bufferMemory, 0);
+            SDL_Log("Buffer memory allocated and bound");
+        }
+
+        // TODO: Create a command pool for these short-lived command buffers using VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+        void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandPool = commandPool;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer commandBuffer;
+            vkAllocateCommandBuffers(logicalDevice, &allocInfo, &commandBuffer);
+
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            vkBeginCommandBuffer(commandBuffer, &beginInfo);
+            VkBufferCopy copyRegion{};
+            copyRegion.srcOffset = 0;
+            copyRegion.dstOffset = 0;
+            copyRegion.size = size;
+            vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
+            vkEndCommandBuffer(commandBuffer);
+
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffer;
+
+            vkQueueSubmit(graphicsQueue, 1, &submitInfo, nullptr);
+
+            // TODO: We can wait here using a fence which would allow for multiple transfers and wait for them all
+            vkQueueWaitIdle(graphicsQueue);
+            vkFreeCommandBuffers(logicalDevice, commandPool, 1, &commandBuffer);
         }
 };
 
