@@ -58,9 +58,14 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+};
+
+const std::vector<uint16> indices = {
+    0, 1, 2, 2, 3, 0
 };
 
 const uint8 MAX_FRAMES_IN_FLIGHT = 2;
@@ -196,6 +201,8 @@ class FirstVulkanTriangleApplication {
 
         VkBuffer vertexBuffer = nullptr;
         VkDeviceMemory vertexBufferMemory = nullptr;
+        VkBuffer indexBuffer = nullptr;
+        VkDeviceMemory indexBufferMemory = nullptr;
 
         VkCommandPool commandPool = nullptr;
         std::vector<VkCommandBuffer> commandBuffers;
@@ -230,6 +237,7 @@ class FirstVulkanTriangleApplication {
             createFramebuffers();
             createCommandPool();
             createVertexBuffer();
+            createIndexBuffer();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -753,6 +761,40 @@ class FirstVulkanTriangleApplication {
             vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
         }
 
+        void createIndexBuffer() {
+            VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+            VkBuffer stagingBuffer;
+            VkDeviceMemory stagingBufferMemory = nullptr;
+            createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                         stagingBuffer, stagingBufferMemory);
+
+            // Now we have to copy the vertex data to the buffer
+            void* mappedMemory;
+            /*  This maps the buffer memory to CPU accessible memory, copy the data and unmap
+             *  Of note, the data may not be copied immediately into the buffer memory and also the writes to the buffer
+             *  may not be visible in the mapped memory yet. There are two solutions:
+             *      Use VK_MEMORY_PROPERTY_HOST_COHERENT_BIT as we did or
+             *      call a vk function to flush memory ranges after writing and a vk function to invalidate ranges
+             *      before reading
+             *  The bit way can may/maybe not affect performance?
+             *  Also, this still does not guarantee the data is visible on the GPU yet. All we are guaranteed is that it
+             *  will be completed before the next call to vkQueueSubmit
+             */
+            vkMapMemory(logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &mappedMemory);
+            memcpy(mappedMemory, indices.data(), bufferSize);
+            vkUnmapMemory(logicalDevice, stagingBufferMemory);
+
+            createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+
+            copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+
+            vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
+            vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
+        }
+
         void createCommandBuffers() {
             commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
             VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
@@ -842,8 +884,11 @@ class FirstVulkanTriangleApplication {
             VkDeviceSize offsets[] = {0};
             vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
+            vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
             // ISSUE THE DRAW COMMAND!
-            vkCmdDraw(commandBuffer, vertices.size(), 1, 0, 0);
+            // TODO: What is instancing?
+            vkCmdDrawIndexed(commandBuffer, indices.size(), 1, 0, 0, 0);
 
             vkCmdEndRenderPass(commandBuffer);
 
@@ -991,6 +1036,9 @@ class FirstVulkanTriangleApplication {
          */
         void cleanup() {
             cleanupSwapChain();
+
+            vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
+            vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
 
             vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
             vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
