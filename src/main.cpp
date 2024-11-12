@@ -7,13 +7,16 @@
 #include <algorithm>
 #include <limits>
 #include <fstream>
+#include <chrono>
 
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_vulkan.h>
 
+#define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <vulkan/vulkan.h>
 
@@ -23,6 +26,13 @@ typedef uint16_t uint16;
 typedef uint8_t uint8;
 
 #define global static
+#define persist static
+
+struct UniformBufferObject {
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;
+};
 
 struct Vertex {
     glm::vec2 position;
@@ -185,14 +195,19 @@ class FirstVulkanTriangleApplication {
         VkPhysicalDevice physicalDevice = nullptr;
         VkDevice logicalDevice = nullptr;
         VkSwapchainKHR swapChain = nullptr;
-        VkFormat swapChainImageFormat = {};
-        VkExtent2D swapChainExtent = {};
+        VkFormat swapChainImageFormat{};
+        VkExtent2D swapChainExtent{};
 
         VkQueue graphicsQueue = nullptr;
         VkQueue presentQueue = nullptr;
 
         VkRenderPass renderPass = nullptr;
-        VkPipelineLayout pipelineLayout = {};
+
+        VkDescriptorSetLayout descriptorSetLayout{};
+        VkDescriptorPool descriptorPool = nullptr;
+        std::vector<VkDescriptorSet> descriptorSets;
+
+        VkPipelineLayout pipelineLayout{};
         VkPipeline graphicsPipeline = nullptr;
 
         std::vector<VkImage> swapChainImages;
@@ -203,6 +218,10 @@ class FirstVulkanTriangleApplication {
         VkDeviceMemory vertexBufferMemory = nullptr;
         VkBuffer indexBuffer = nullptr;
         VkDeviceMemory indexBufferMemory = nullptr;
+
+        std::vector<VkBuffer> uniformBuffers;
+        std::vector<VkDeviceMemory> uniformBuffersMemory;
+        std::vector<void*> uniformBuffersMapped;
 
         VkCommandPool commandPool = nullptr;
         std::vector<VkCommandBuffer> commandBuffers;
@@ -233,11 +252,15 @@ class FirstVulkanTriangleApplication {
             createSwapChain();
             createImageViews();
             createRenderPass();
+            createDescriptorSetLayout();
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
             createVertexBuffer();
             createIndexBuffer();
+            createUniformBuffers();
+            createDescriptorPool();
+            createDescriptorSets();
             createCommandBuffers();
             createSyncObjects();
         }
@@ -515,6 +538,25 @@ class FirstVulkanTriangleApplication {
             SDL_Log("Render pass created");
         }
 
+        void createDescriptorSetLayout() {
+            VkDescriptorSetLayoutBinding uboLayoutBinding{};
+            uboLayoutBinding.binding = 0;
+            uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            uboLayoutBinding.descriptorCount = 1;
+            uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+            uboLayoutBinding.pImmutableSamplers = nullptr;
+
+            VkDescriptorSetLayoutCreateInfo layoutInfo{};
+            layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            layoutInfo.bindingCount = 1;
+            layoutInfo.pBindings = &uboLayoutBinding;
+
+            if (vkCreateDescriptorSetLayout(logicalDevice, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create descriptor set layout");
+            }
+            SDL_Log("Descriptor set layouts created");
+        }
+
         void createGraphicsPipeline() {
             auto vertShaderCode = readFile("../shaders/compiled/vert.spv");
             auto fragShaderCode = readFile("../shaders/compiled/frag.spv");
@@ -593,7 +635,8 @@ class FirstVulkanTriangleApplication {
 
             // Do we cull faces and which do we consider front facing
             rasterizerCreateInfo.cullMode = VK_CULL_MODE_BACK_BIT;
-            rasterizerCreateInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
+            // Make counter clockwise because we are inverting Y
+            rasterizerCreateInfo.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
             // Can alter the depth values by adding a constant or biasing based on slope
             rasterizerCreateInfo.depthBiasEnable = VK_FALSE;
@@ -638,14 +681,14 @@ class FirstVulkanTriangleApplication {
             colorBlendStateCreateInfo.blendConstants[3] = 0.0f;
 
             // VK Pipeline is where we specify uniform shader values. Empty for now
-            VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo{};
-            pipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            pipelineLayoutCreateInfo.setLayoutCount = 0;
-            pipelineLayoutCreateInfo.pSetLayouts = nullptr;
-            pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
-            pipelineLayoutCreateInfo.pPushConstantRanges = nullptr;
+            VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+            pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            pipelineLayoutInfo.setLayoutCount = 1;
+            pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+            pipelineLayoutInfo.pushConstantRangeCount = 0;
+            pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
-            if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutCreateInfo, nullptr,
+            if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutInfo, nullptr,
                                        &pipelineLayout) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create pipeline layout");
             }
@@ -795,6 +838,75 @@ class FirstVulkanTriangleApplication {
             vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
         }
 
+        void createUniformBuffers() {
+            VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+            uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+            uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+            uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+            for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                    uniformBuffers[i], uniformBuffersMemory[i]);
+                // Persistent Mapping
+                vkMapMemory(logicalDevice, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+            }
+        }
+
+        void createDescriptorPool() {
+            VkDescriptorPoolSize poolSize{};
+            poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            poolSize.descriptorCount = (uint32)MAX_FRAMES_IN_FLIGHT;
+
+            VkDescriptorPoolCreateInfo poolInfo{};
+            poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            poolInfo.poolSizeCount = 1;
+            poolInfo.pPoolSizes = &poolSize;
+            poolInfo.maxSets = (uint32)MAX_FRAMES_IN_FLIGHT;
+            poolInfo.flags = 0;
+
+            if (vkCreateDescriptorPool(logicalDevice, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create descriptor pool");
+            }
+            SDL_Log("Descriptor pool created");
+        }
+
+        void createDescriptorSets() {
+            std::vector layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+            VkDescriptorSetAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            allocInfo.descriptorPool = descriptorPool;
+            allocInfo.pSetLayouts = layouts.data();
+            allocInfo.descriptorSetCount = (uint32)MAX_FRAMES_IN_FLIGHT;
+
+            descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+            if (vkAllocateDescriptorSets(logicalDevice, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create descriptor sets");
+            }
+            SDL_Log("Descriptor sets created");
+
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                VkDescriptorBufferInfo bufferInfo{};
+                bufferInfo.buffer = uniformBuffers[i];
+                bufferInfo.range = sizeof(UniformBufferObject);
+                bufferInfo.offset = 0;
+
+                VkWriteDescriptorSet descriptorSetWrite{};
+                descriptorSetWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descriptorSetWrite.dstSet = descriptorSets[i];
+                descriptorSetWrite.dstBinding = 0;
+                descriptorSetWrite.dstArrayElement = 0;
+                descriptorSetWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                descriptorSetWrite.descriptorCount = 1;
+                descriptorSetWrite.pBufferInfo = &bufferInfo;
+                descriptorSetWrite.pImageInfo = nullptr;
+                descriptorSetWrite.pTexelBufferView = nullptr;
+
+                vkUpdateDescriptorSets(logicalDevice, 1, &descriptorSetWrite, 0, nullptr);
+            }
+        }
+
         void createCommandBuffers() {
             commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
             VkCommandBufferAllocateInfo commandBufferAllocateInfo{};
@@ -886,6 +998,9 @@ class FirstVulkanTriangleApplication {
 
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16);
 
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0,
+                                    1, &descriptorSets[currentFrame], 0, nullptr);
+
             // ISSUE THE DRAW COMMAND!
             // TODO: What is instancing?
             vkCmdDrawIndexed(commandBuffer, indices.size(), 1, 0, 0, 0);
@@ -916,6 +1031,8 @@ class FirstVulkanTriangleApplication {
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
+
+            updateUniformBuffer(currentFrame);
 
             VkSubmitInfo submitInfo{};
             submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1030,12 +1147,21 @@ class FirstVulkanTriangleApplication {
         }
 
         /*
-         * Feels largely pointless and think about removing in actual implementation
+         * TODO: Feels largely pointless and think about removing in actual implementation
          * When we close the application we don't want the user to wait for us to needlessly clean up memory that the OS
          * will handle.
          */
         void cleanup() {
             cleanupSwapChain();
+
+            vkDestroyDescriptorPool(logicalDevice, descriptorPool, nullptr);
+
+            vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
+
+            for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+                vkDestroyBuffer(logicalDevice, uniformBuffers[i], nullptr);
+                vkFreeMemory(logicalDevice, uniformBuffersMemory[i], nullptr);
+            }
 
             vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
             vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
@@ -1302,6 +1428,30 @@ class FirstVulkanTriangleApplication {
             // TODO: We can wait here using a fence which would allow for multiple transfers and wait for them all
             vkQueueWaitIdle(graphicsQueue);
             vkFreeCommandBuffers(logicalDevice, commandPool, 1, &commandBuffer);
+        }
+
+        void updateUniformBuffer(uint32 currentFrame) {
+            persist auto startTime = std::chrono::high_resolution_clock::now();
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            float time = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+            UniformBufferObject ubo{};
+            // Good resource https://learnopengl.com/Getting-started/Coordinate-Systems
+            // This creates a rotation around the z-axis
+            ubo.model = glm::rotate(glm::mat4(1.0f),
+                time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+            ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 0.0f, 1.0f));
+
+            ubo.proj = glm::perspective(glm::radians(45.0f),
+                swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
+
+            // GLM is made for OpenGL where the clip Y coordinate is flipped
+            ubo.proj[1][1] *= -1;
+
+            // TODO: Not the most efficient way to pass small buffers of data to shaders. See Push Contants
+            memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
         }
 };
 
