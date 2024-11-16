@@ -14,6 +14,7 @@
 #include <SDL3/SDL_vulkan.h>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE // Use Vulkan depth range 0 - 1
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -40,7 +41,7 @@ struct UniformBufferObject {
 };
 
 struct Vertex {
-    glm::vec2 pos;
+    glm::vec3 pos;
     glm::vec3 color;
     glm::vec2 texCoord;
 
@@ -61,7 +62,7 @@ struct Vertex {
         // Which location in the vertex shader, 0 = position
         attributeDescriptions[0].location = 0;
         // Confusingly uses colour format but really means vector of 2 32 bit floats
-        attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
         // Where to start reading from
         attributeDescriptions[0].offset = offsetof(Vertex, pos);
 
@@ -79,14 +80,21 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+
+    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+
 };
 
 const std::vector<uint16> indices = {
-    0, 1, 2, 2, 3, 0
+    0, 1, 2, 2, 3, 0,
+    4, 5, 6, 6, 7, 4
 };
 
 const uint8 MAX_FRAMES_IN_FLIGHT = 2;
@@ -225,15 +233,18 @@ class FirstVulkanTriangleApplication {
         std::vector<VkImageView> swapChainImageViews;
         std::vector<VkFramebuffer> swapChainFramebuffers;
 
-        VkImageView textureImageView = nullptr;
-        VkSampler textureSampler = nullptr;
-
         VkBuffer stagingBuffer = nullptr;
         VkDeviceMemory stagingBufferMemory = nullptr;
+
+        VkImage depthImage = nullptr;
+        VkDeviceMemory depthImageMemory = nullptr;
+        VkImageView depthImageView = nullptr;
 
         VkImage textureImage = nullptr;
         VkDeviceMemory textureImageMemory = nullptr;
         VkFormat textureImageFormat = VK_FORMAT_R8G8B8A8_SRGB;
+        VkImageView textureImageView = nullptr;
+        VkSampler textureSampler = nullptr;
 
         VkBuffer vertexBuffer = nullptr;
         VkDeviceMemory vertexBufferMemory = nullptr;
@@ -277,6 +288,7 @@ class FirstVulkanTriangleApplication {
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
+            createDepthResources();
             createTextureImage();
             createTextureImageView();
             createTextureSampler();
@@ -781,6 +793,14 @@ class FirstVulkanTriangleApplication {
             SDL_Log("Command pool created");
         }
 
+        void createDepthResouces() {
+            VkFormat depthFormat = findDepthFormat();
+            createImage(swapChainExtent.width, swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        depthImage, depthImageMemory);
+            depthImageView = createImageView(depthImage, depthFormat);
+        }
+
         void createTextureImage() {
             int texWidth, texHeight, texChannels;
             stbi_uc* pixels = stbi_load("../textures/texture.jpg", &texWidth, &texHeight,
@@ -854,7 +874,7 @@ class FirstVulkanTriangleApplication {
             }
         }
 
-        VkImageView createImageView(VkImage image, VkFormat format) {
+        VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags) {
             VkImageViewCreateInfo createInfo{};
             createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             createInfo.image = image;
@@ -870,7 +890,7 @@ class FirstVulkanTriangleApplication {
             createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
 
             // Describes the images purpose and which part we want to access
-            createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            createInfo.subresourceRange.aspectMask = aspectFlags;
             createInfo.subresourceRange.baseMipLevel = 0;
             createInfo.subresourceRange.levelCount = 1;
             createInfo.subresourceRange.baseArrayLayer = 0;
@@ -1716,6 +1736,32 @@ class FirstVulkanTriangleApplication {
 
             vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
             endSingleTimeCommands(commandBuffer);
+        }
+
+        VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling,
+                                     VkFormatFeatureFlags features) {
+            for (VkFormat format : candidates) {
+                VkFormatProperties props;
+                vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+                if (tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features) {
+                    return format;
+                } else if (tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features) {
+                    return format;
+                } else {
+                    throw std::runtime_error("failed to find supported format");
+                }
+            }
+        }
+
+        VkFormat findDepthFormat() {
+            return findSupportedFormat(
+                {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
+                VK_IMAGE_TILING_OPTIMAL, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+            );
+        }
+
+        bool hasStencilComponent(VkFormat format) {
+            return format == VK_FORMAT_D32_SFLOAT_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT;
         }
 };
 
