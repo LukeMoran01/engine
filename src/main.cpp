@@ -18,6 +18,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #include <vulkan/vulkan.h>
 
 typedef uint64_t uint64;
@@ -28,10 +31,13 @@ typedef uint8_t uint8;
 #define global static
 #define persist static
 
+// Objects that are passed to the shaders require specific memory alignments
+// So lets be explicit even if it would aligned with the base typed already
+// https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap15.html#interfaces-resources-layout
 struct UniformBufferObject {
-    glm::mat4 model;
-    glm::mat4 view;
-    glm::mat4 proj;
+    alignas(16)glm::mat4 model;
+    alignas(16)glm::mat4 view;
+    alignas(16)glm::mat4 proj;
 };
 
 struct Vertex {
@@ -193,7 +199,7 @@ class FirstVulkanTriangleApplication {
         VkInstance instance = nullptr;
         VkSurfaceKHR surface = nullptr;
         VkPhysicalDevice physicalDevice = nullptr;
-        VkDevice logicalDevice = nullptr;
+        VkDevice device = nullptr;
         VkSwapchainKHR swapChain = nullptr;
         VkFormat swapChainImageFormat{};
         VkExtent2D swapChainExtent{};
@@ -213,6 +219,12 @@ class FirstVulkanTriangleApplication {
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
         std::vector<VkFramebuffer> swapChainFramebuffers;
+
+        VkBuffer stagingBuffer = nullptr;
+        VkDeviceMemory stagingBufferMemory = nullptr;
+
+        VkImage textureImage = nullptr;
+        VkDeviceMemory textureImageMemory = nullptr;
 
         VkBuffer vertexBuffer = nullptr;
         VkDeviceMemory vertexBufferMemory = nullptr;
@@ -256,6 +268,7 @@ class FirstVulkanTriangleApplication {
             createGraphicsPipeline();
             createFramebuffers();
             createCommandPool();
+            createTextureImage();
             createVertexBuffer();
             createIndexBuffer();
             createUniformBuffers();
@@ -379,13 +392,13 @@ class FirstVulkanTriangleApplication {
 
             // Up-to-date implementations of Vulkan ignore validation layers defined here - test if okay
 
-            if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &logicalDevice) != VK_SUCCESS) {
+            if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create logical device");
             }
 
             // queueIndex is the index within the queue family to retrieve
-            vkGetDeviceQueue(logicalDevice, indices.graphicsFamily.value(), 0, &graphicsQueue);
-            vkGetDeviceQueue(logicalDevice, indices.presentFamily.value(), 0, &presentQueue);
+            vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+            vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
 
             SDL_Log("Logical device created");
         }
@@ -448,15 +461,15 @@ class FirstVulkanTriangleApplication {
             // When we create a new swap chain like say on window resize, we need to reference the previous one
             createInfo.oldSwapchain = nullptr;
 
-            if (vkCreateSwapchainKHR(logicalDevice, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
+            if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create swap chain");
             }
             SDL_Log("Swap chain created");
 
             // We only specify min number of images so we need to retrieve actual number
-            vkGetSwapchainImagesKHR(logicalDevice, swapChain, &imageCount, nullptr);
+            vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
             swapChainImages.resize(imageCount);
-            vkGetSwapchainImagesKHR(logicalDevice, swapChain, &imageCount, swapChainImages.data());
+            vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
         }
 
         void createImageViews() {
@@ -483,7 +496,7 @@ class FirstVulkanTriangleApplication {
                 createInfo.subresourceRange.baseArrayLayer = 0;
                 createInfo.subresourceRange.layerCount = 1;
 
-                if (vkCreateImageView(logicalDevice, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
+                if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
                     throw std::runtime_error("failed to create image view");
                 }
             }
@@ -531,7 +544,7 @@ class FirstVulkanTriangleApplication {
             renderPassInfo.dependencyCount = 1;
             renderPassInfo.pDependencies = &subpassDependency;
 
-            if (vkCreateRenderPass(logicalDevice, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
+            if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create render pass");
             }
 
@@ -551,7 +564,7 @@ class FirstVulkanTriangleApplication {
             layoutInfo.bindingCount = 1;
             layoutInfo.pBindings = &uboLayoutBinding;
 
-            if (vkCreateDescriptorSetLayout(logicalDevice, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
+            if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create descriptor set layout");
             }
             SDL_Log("Descriptor set layouts created");
@@ -688,7 +701,7 @@ class FirstVulkanTriangleApplication {
             pipelineLayoutInfo.pushConstantRangeCount = 0;
             pipelineLayoutInfo.pPushConstantRanges = nullptr;
 
-            if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutInfo, nullptr,
+            if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr,
                                        &pipelineLayout) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create pipeline layout");
             }
@@ -717,15 +730,15 @@ class FirstVulkanTriangleApplication {
             pipelineCreateInfo.basePipelineHandle = nullptr;
             pipelineCreateInfo.basePipelineIndex = -1;
 
-            if (vkCreateGraphicsPipelines(logicalDevice, nullptr, 1, &pipelineCreateInfo,
+            if (vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineCreateInfo,
                                           nullptr, &graphicsPipeline) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create graphics pipeline");
             }
 
             SDL_Log("Graphics pipeline created");
 
-            vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
-            vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
+            vkDestroyShaderModule(device, vertShaderModule, nullptr);
+            vkDestroyShaderModule(device, fragShaderModule, nullptr);
         }
 
         void createFramebuffers() {
@@ -742,7 +755,7 @@ class FirstVulkanTriangleApplication {
                 framebufferCreateInfo.height = swapChainExtent.height;
                 framebufferCreateInfo.layers = 1;
 
-                if (vkCreateFramebuffer(logicalDevice, &framebufferCreateInfo, nullptr,
+                if (vkCreateFramebuffer(device, &framebufferCreateInfo, nullptr,
                                         &swapChainFramebuffers[i]) != VK_SUCCESS) {
                     throw std::runtime_error("failed to create framebuffer");
                 }
@@ -763,11 +776,47 @@ class FirstVulkanTriangleApplication {
             commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
 
-            if (vkCreateCommandPool(logicalDevice, &commandPoolCreateInfo, nullptr, &commandPool) != VK_SUCCESS) {
+            if (vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandPool) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create command pool");
             }
 
             SDL_Log("Command pool created");
+        }
+
+        void createTextureImage() {
+            int texWidth, texHeight, texChannels;
+            stbi_uc *pixels = stbi_load("../textures/texture.jpg", &texWidth, &texHeight,
+                &texChannels, STBI_rgb_alpha);
+            VkDeviceSize imageSize = texWidth * texHeight * 4;
+
+            VkFormat imageFormat = VK_FORMAT_R8G8B8A8_SRGB;
+
+            if (!pixels) {
+                throw std::runtime_error("failed to load texture image");
+            }
+
+            createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                stagingBuffer, stagingBufferMemory);
+
+            void* data;
+            vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+            memcpy(data, pixels, imageSize);
+            vkUnmapMemory(device, stagingBufferMemory);
+
+            stbi_image_free(pixels);
+
+            createImage(texWidth, texHeight, imageFormat, VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+
+            // Transition the image to be a destination for our buffer then transition to layout for shader access
+            transitionImageLayout(textureImage, imageFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
+            transitionImageLayout(textureImage, imageFormat, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+            vkDestroyBuffer(device, stagingBuffer, nullptr);
+            vkFreeMemory(device, stagingBufferMemory, nullptr);
         }
 
         void createVertexBuffer() {
@@ -780,7 +829,7 @@ class FirstVulkanTriangleApplication {
                          stagingBuffer, stagingBufferMemory);
 
             // Now we have to copy the vertex data to the buffer
-            void* mappedMemory;
+            void* data;
             /*  This maps the buffer memory to CPU accessible memory, copy the data and unmap
              *  Of note, the data may not be copied immediately into the buffer memory and also the writes to the buffer
              *  may not be visible in the mapped memory yet. There are two solutions:
@@ -791,17 +840,17 @@ class FirstVulkanTriangleApplication {
              *  Also, this still does not guarantee the data is visible on the GPU yet. All we are guaranteed is that it
              *  will be completed before the next call to vkQueueSubmit
              */
-            vkMapMemory(logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &mappedMemory);
-            memcpy(mappedMemory, vertices.data(), bufferSize);
-            vkUnmapMemory(logicalDevice, stagingBufferMemory);
+            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+            memcpy(data, vertices.data(), bufferSize);
+            vkUnmapMemory(device, stagingBufferMemory);
 
             createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, vertexBuffer, vertexBufferMemory);
 
             copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 
-            vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
-            vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
+            vkDestroyBuffer(device, stagingBuffer, nullptr);
+            vkFreeMemory(device, stagingBufferMemory, nullptr);
         }
 
         void createIndexBuffer() {
@@ -825,17 +874,17 @@ class FirstVulkanTriangleApplication {
              *  Also, this still does not guarantee the data is visible on the GPU yet. All we are guaranteed is that it
              *  will be completed before the next call to vkQueueSubmit
              */
-            vkMapMemory(logicalDevice, stagingBufferMemory, 0, bufferSize, 0, &mappedMemory);
+            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &mappedMemory);
             memcpy(mappedMemory, indices.data(), bufferSize);
-            vkUnmapMemory(logicalDevice, stagingBufferMemory);
+            vkUnmapMemory(device, stagingBufferMemory);
 
             createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
 
             copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 
-            vkDestroyBuffer(logicalDevice, stagingBuffer, nullptr);
-            vkFreeMemory(logicalDevice, stagingBufferMemory, nullptr);
+            vkDestroyBuffer(device, stagingBuffer, nullptr);
+            vkFreeMemory(device, stagingBufferMemory, nullptr);
         }
 
         void createUniformBuffers() {
@@ -850,7 +899,7 @@ class FirstVulkanTriangleApplication {
                     VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                     uniformBuffers[i], uniformBuffersMemory[i]);
                 // Persistent Mapping
-                vkMapMemory(logicalDevice, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+                vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
             }
         }
 
@@ -866,7 +915,7 @@ class FirstVulkanTriangleApplication {
             poolInfo.maxSets = (uint32)MAX_FRAMES_IN_FLIGHT;
             poolInfo.flags = 0;
 
-            if (vkCreateDescriptorPool(logicalDevice, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
+            if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create descriptor pool");
             }
             SDL_Log("Descriptor pool created");
@@ -881,7 +930,7 @@ class FirstVulkanTriangleApplication {
             allocInfo.descriptorSetCount = (uint32)MAX_FRAMES_IN_FLIGHT;
 
             descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-            if (vkAllocateDescriptorSets(logicalDevice, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
+            if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create descriptor sets");
             }
             SDL_Log("Descriptor sets created");
@@ -903,7 +952,7 @@ class FirstVulkanTriangleApplication {
                 descriptorSetWrite.pImageInfo = nullptr;
                 descriptorSetWrite.pTexelBufferView = nullptr;
 
-                vkUpdateDescriptorSets(logicalDevice, 1, &descriptorSetWrite, 0, nullptr);
+                vkUpdateDescriptorSets(device, 1, &descriptorSetWrite, 0, nullptr);
             }
         }
 
@@ -915,7 +964,7 @@ class FirstVulkanTriangleApplication {
             commandBufferAllocateInfo.commandPool = commandPool;
             commandBufferAllocateInfo.commandBufferCount = (uint32)commandBuffers.size();
 
-            if (vkAllocateCommandBuffers(logicalDevice, &commandBufferAllocateInfo, commandBuffers.data()) !=
+            if (vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, commandBuffers.data()) !=
                 VK_SUCCESS) {
                 throw std::runtime_error("failed to create command buffers");
             }
@@ -937,11 +986,11 @@ class FirstVulkanTriangleApplication {
             fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
             for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                if ((vkCreateSemaphore(logicalDevice, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphores[i]) !=
+                if ((vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &imageAvailableSemaphores[i]) !=
                         VK_SUCCESS)
-                    || (vkCreateSemaphore(logicalDevice, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphores[i]) !=
+                    || (vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &renderFinishedSemaphores[i]) !=
                         VK_SUCCESS)
-                    || (vkCreateFence(logicalDevice, &fenceCreateInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS)) {
+                    || (vkCreateFence(device, &fenceCreateInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS)) {
                     throw std::runtime_error("failed to sync objects");
                 }
             }
@@ -1013,10 +1062,10 @@ class FirstVulkanTriangleApplication {
         }
 
         void drawFrame() {
-            vkWaitForFences(logicalDevice, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+            vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
 
             uint32 imageIndex = 0;
-            VkResult result = vkAcquireNextImageKHR(logicalDevice, swapChain, UINT64_MAX,
+            VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX,
                                                     imageAvailableSemaphores[currentFrame], nullptr,
                                                     &imageIndex);
 
@@ -1027,7 +1076,7 @@ class FirstVulkanTriangleApplication {
                 throw std::runtime_error("failed to acquire swap chain image");
             }
 
-            vkResetFences(logicalDevice, 1, &inFlightFences[currentFrame]);
+            vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
             vkResetCommandBuffer(commandBuffers[currentFrame], 0);
             recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
@@ -1093,7 +1142,7 @@ class FirstVulkanTriangleApplication {
                 }
             }
 
-            vkDeviceWaitIdle(logicalDevice);
+            vkDeviceWaitIdle(device);
 
             cleanupSwapChain();
 
@@ -1121,7 +1170,7 @@ class FirstVulkanTriangleApplication {
                 }
                 drawFrame();
             }
-            vkDeviceWaitIdle(logicalDevice);
+            vkDeviceWaitIdle(device);
         }
 
         void initWindow() {
@@ -1138,12 +1187,12 @@ class FirstVulkanTriangleApplication {
 
         void cleanupSwapChain() {
             for (auto framebuffer : swapChainFramebuffers) {
-                vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
+                vkDestroyFramebuffer(device, framebuffer, nullptr);
             }
             for (auto imageView : swapChainImageViews) {
-                vkDestroyImageView(logicalDevice, imageView, nullptr);
+                vkDestroyImageView(device, imageView, nullptr);
             }
-            vkDestroySwapchainKHR(logicalDevice, swapChain, nullptr);
+            vkDestroySwapchainKHR(device, swapChain, nullptr);
         }
 
         /*
@@ -1154,35 +1203,38 @@ class FirstVulkanTriangleApplication {
         void cleanup() {
             cleanupSwapChain();
 
-            vkDestroyDescriptorPool(logicalDevice, descriptorPool, nullptr);
+            vkDestroyImage(device, textureImage, nullptr);
+            vkFreeMemory(device, textureImageMemory, nullptr);
 
-            vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
+            vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+
+            vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
             for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                vkDestroyBuffer(logicalDevice, uniformBuffers[i], nullptr);
-                vkFreeMemory(logicalDevice, uniformBuffersMemory[i], nullptr);
+                vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+                vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
             }
 
-            vkDestroyBuffer(logicalDevice, indexBuffer, nullptr);
-            vkFreeMemory(logicalDevice, indexBufferMemory, nullptr);
+            vkDestroyBuffer(device, indexBuffer, nullptr);
+            vkFreeMemory(device, indexBufferMemory, nullptr);
 
-            vkDestroyBuffer(logicalDevice, vertexBuffer, nullptr);
-            vkFreeMemory(logicalDevice, vertexBufferMemory, nullptr);
+            vkDestroyBuffer(device, vertexBuffer, nullptr);
+            vkFreeMemory(device, vertexBufferMemory, nullptr);
 
-            vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
-            vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+            vkDestroyPipeline(device, graphicsPipeline, nullptr);
+            vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
 
-            vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
+            vkDestroyRenderPass(device, renderPass, nullptr);
 
             for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
-                vkDestroySemaphore(logicalDevice, imageAvailableSemaphores[i], nullptr);
-                vkDestroySemaphore(logicalDevice, renderFinishedSemaphores[i], nullptr);
-                vkDestroyFence(logicalDevice, inFlightFences[i], nullptr);
+                vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+                vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+                vkDestroyFence(device, inFlightFences[i], nullptr);
             }
 
-            vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
+            vkDestroyCommandPool(device, commandPool, nullptr);
 
-            vkDestroyDevice(logicalDevice, nullptr);
+            vkDestroyDevice(device, nullptr);
             vkDestroySurfaceKHR(instance, surface, nullptr);
             vkDestroyInstance(instance, nullptr);
             SDL_DestroyWindow(window);
@@ -1338,16 +1390,12 @@ class FirstVulkanTriangleApplication {
             createInfo.pCode = reinterpret_cast<const uint32*>(code.data());
 
             VkShaderModule shaderModule = nullptr;
-            if (vkCreateShaderModule(logicalDevice, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+            if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
                 throw std::runtime_error("Could not create shader module");
             }
             return shaderModule;
         }
 
-        /*
-        * This seems crazy. We need to get passed different types of memory available and check that one matches the
-        * requirements we need for our operation...
-        */
         uint32 findMemoryType(uint32 typeFilter, VkMemoryPropertyFlags properties) {
             VkPhysicalDeviceMemoryProperties memoryProperties;
             vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
@@ -1371,13 +1419,13 @@ class FirstVulkanTriangleApplication {
             bufferCreateInfo.usage = usage;
             bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-            if (vkCreateBuffer(logicalDevice, &bufferCreateInfo, nullptr, &buffer) != VK_SUCCESS) {
+            if (vkCreateBuffer(device, &bufferCreateInfo, nullptr, &buffer) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create buffer");
             }
             SDL_Log("Buffer created");
 
             VkMemoryRequirements memoryRequirements;
-            vkGetBufferMemoryRequirements(logicalDevice, buffer, &memoryRequirements);
+            vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
 
             VkMemoryAllocateInfo allocInfo{};
             allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -1385,49 +1433,27 @@ class FirstVulkanTriangleApplication {
             allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits,
                                                        properties);
 
-            if (vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
+            if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
                 throw std::runtime_error("failed to allocate buffer memory");
             }
 
             // The final argument is the offset in this block of memory, because this was created specifically for this
             // we start at the start
-            vkBindBufferMemory(logicalDevice, buffer, bufferMemory, 0);
+            vkBindBufferMemory(device, buffer, bufferMemory, 0);
             SDL_Log("Buffer memory allocated and bound");
         }
 
         // TODO: Create a command pool for these short-lived command buffers using VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
         void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
-            VkCommandBufferAllocateInfo allocInfo{};
-            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            allocInfo.commandPool = commandPool;
-            allocInfo.commandBufferCount = 1;
+            VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
-            VkCommandBuffer commandBuffer;
-            vkAllocateCommandBuffers(logicalDevice, &allocInfo, &commandBuffer);
-
-            VkCommandBufferBeginInfo beginInfo{};
-            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-            vkBeginCommandBuffer(commandBuffer, &beginInfo);
             VkBufferCopy copyRegion{};
             copyRegion.srcOffset = 0;
             copyRegion.dstOffset = 0;
             copyRegion.size = size;
             vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
-            vkEndCommandBuffer(commandBuffer);
 
-            VkSubmitInfo submitInfo{};
-            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submitInfo.commandBufferCount = 1;
-            submitInfo.pCommandBuffers = &commandBuffer;
-
-            vkQueueSubmit(graphicsQueue, 1, &submitInfo, nullptr);
-
-            // TODO: We can wait here using a fence which would allow for multiple transfers and wait for them all
-            vkQueueWaitIdle(graphicsQueue);
-            vkFreeCommandBuffers(logicalDevice, commandPool, 1, &commandBuffer);
+            endSingleTimeCommands(commandBuffer);
         }
 
         void updateUniformBuffer(uint32 currentFrame) {
@@ -1453,6 +1479,156 @@ class FirstVulkanTriangleApplication {
             // TODO: Not the most efficient way to pass small buffers of data to shaders. See Push Contants
             memcpy(uniformBuffersMapped[currentFrame], &ubo, sizeof(ubo));
         }
+
+        // Starts with buffer allocation and returns after begin is called
+        VkCommandBuffer beginSingleTimeCommands() {
+            VkCommandBufferAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandPool = commandPool;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer commandBuffer = nullptr;
+            if (vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer) != VK_SUCCESS) {
+                throw std::runtime_error("failed to allocate single time command buffer");
+            }
+
+            VkCommandBufferBeginInfo beginInfo{};
+            beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+            vkBeginCommandBuffer(commandBuffer, &beginInfo);
+            return commandBuffer;
+        }
+
+        // Starts with call to end command buffer and returns after freeing
+        void endSingleTimeCommands(VkCommandBuffer commandBuffer) {
+            vkEndCommandBuffer(commandBuffer);
+
+            VkSubmitInfo submitInfo{};
+            submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &commandBuffer;
+            vkQueueSubmit(graphicsQueue, 1, &submitInfo, nullptr);
+            vkQueueWaitIdle(graphicsQueue);
+            // TODO: We can wait here using a fence which would allow for multiple transfers and wait for them all
+            // comment copied from copyBuffer before pulling logic out
+            vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+        }
+
+        void createImage(uint32 width, uint32 height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
+                VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
+
+                VkImageCreateInfo imageInfo{};
+                imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+                imageInfo.imageType = VK_IMAGE_TYPE_2D;
+                imageInfo.extent.width = width;
+                imageInfo.extent.height = height;
+                imageInfo.extent.depth = 1;
+                imageInfo.mipLevels = 1;
+                imageInfo.arrayLayers = 1;
+                imageInfo.format = format;
+                // Only two options but we choose this as we are using a staging buffer instead of staging image
+                // TODO: Learn pro/cons of staging buffer vs staging image
+                imageInfo.tiling = tiling;
+                imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                imageInfo.usage = usage;
+                imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+                imageInfo.flags = 0;
+
+                if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+                    throw std::runtime_error("failed to create image");
+                }
+
+                SDL_Log("Image created");
+
+                VkMemoryRequirements memoryRequirements;
+                vkGetImageMemoryRequirements(device, image, &memoryRequirements);
+
+                VkMemoryAllocateInfo allocInfo{};
+                allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                allocInfo.allocationSize = memoryRequirements.size;
+                allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
+
+                if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
+                    throw std::runtime_error("failed to allocate texture memory");
+                }
+
+                vkBindImageMemory(device, image, imageMemory, 0);
+            }
+
+        void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
+            VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = oldLayout;
+            barrier.newLayout = newLayout;
+            // These two fields would be used to transfer queue family ownership
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+
+            barrier.image = image;
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+
+            VkPipelineStageFlags srcStage = 0;
+            VkPipelineStageFlags dstStage = 0;
+
+            if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+                // What operations need to happen before/wait till after
+                barrier.srcAccessMask = 0;
+                barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+                // Pipelines that must occur before/wait till after
+                srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+                srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            } else {
+                throw std::runtime_error("unsupported layout transition");
+            }
+
+            // src/dst stagemask specify in which pipeline stage the operations occur that should happen before/after
+            // This table lists the allowed values https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap7.html#synchronization-access-types-supported
+            vkCmdPipelineBarrier(commandBuffer,
+                srcStage, dstStage,
+                0,
+                0, nullptr,
+                0, nullptr,
+                1, &barrier);
+
+            endSingleTimeCommands(commandBuffer);
+        }
+
+        void copyBufferToImage(VkBuffer buffer, VkImage image, uint32 width, uint32 height) {
+            VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+            VkBufferImageCopy region{};
+            region.bufferOffset = 0;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = 0;
+            region.imageSubresource.baseArrayLayer = 0;
+            region.imageSubresource.layerCount = 1;
+
+            region.imageOffset = {0, 0, 0};
+            region.imageExtent = {width, height, 1};
+
+            vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            endSingleTimeCommands(commandBuffer);
+        }
+
 };
 
 // Entry point for SDL3 with header inclusion
