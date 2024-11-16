@@ -4,7 +4,6 @@
 #include <cstring>
 #include <optional>
 #include <set>
-#include <algorithm>
 #include <limits>
 #include <fstream>
 #include <chrono>
@@ -41,8 +40,9 @@ struct UniformBufferObject {
 };
 
 struct Vertex {
-    glm::vec2 position;
+    glm::vec2 pos;
     glm::vec3 color;
+    glm::vec2 texCoord;
 
     static VkVertexInputBindingDescription getBindingDescription() {
         VkVertexInputBindingDescription bindingDescription{};
@@ -55,29 +55,34 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
         attributeDescriptions[0].binding = 0;
         // Which location in the vertex shader, 0 = position
         attributeDescriptions[0].location = 0;
         // Confusingly uses colour format but really means vector of 2 32 bit floats
         attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
         // Where to start reading from
-        attributeDescriptions[0].offset = offsetof(Vertex, position);
+        attributeDescriptions[0].offset = offsetof(Vertex, pos);
 
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
         attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
         attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+        attributeDescriptions[2].binding = 0;
+        attributeDescriptions[2].location = 2;
+        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
         return attributeDescriptions;
     }
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
 };
 
 const std::vector<uint16> indices = {
@@ -111,7 +116,7 @@ struct QueueFamilyIndices {
     std::optional<uint32> graphicsFamily;
     std::optional<uint32> presentFamily;
 
-    bool isComplete() const {
+    [[nodiscard]] bool isComplete() const {
         return graphicsFamily.has_value() && presentFamily.has_value();
     }
 };
@@ -220,11 +225,15 @@ class FirstVulkanTriangleApplication {
         std::vector<VkImageView> swapChainImageViews;
         std::vector<VkFramebuffer> swapChainFramebuffers;
 
+        VkImageView textureImageView = nullptr;
+        VkSampler textureSampler = nullptr;
+
         VkBuffer stagingBuffer = nullptr;
         VkDeviceMemory stagingBufferMemory = nullptr;
 
         VkImage textureImage = nullptr;
         VkDeviceMemory textureImageMemory = nullptr;
+        VkFormat textureImageFormat = VK_FORMAT_R8G8B8A8_SRGB;
 
         VkBuffer vertexBuffer = nullptr;
         VkDeviceMemory vertexBufferMemory = nullptr;
@@ -269,6 +278,8 @@ class FirstVulkanTriangleApplication {
             createFramebuffers();
             createCommandPool();
             createTextureImage();
+            createTextureImageView();
+            createTextureSampler();
             createVertexBuffer();
             createIndexBuffer();
             createUniformBuffers();
@@ -377,6 +388,7 @@ class FirstVulkanTriangleApplication {
 
             // Would include things like geometry shaders, come back to it later
             VkPhysicalDeviceFeatures deviceFeatures{};
+            deviceFeatures.samplerAnisotropy = VK_TRUE;
 
             // Now make the device creation info and pass the above structs to it
             VkDeviceCreateInfo createInfo{};
@@ -475,30 +487,7 @@ class FirstVulkanTriangleApplication {
         void createImageViews() {
             swapChainImageViews.resize(swapChainImages.size());
             for (uint32 i = 0; i < swapChainImages.size(); i++) {
-                VkImageViewCreateInfo createInfo{};
-                createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-                createInfo.image = swapChainImages[i];
-
-                // Specifies how the image data should be interpreted
-                createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-                createInfo.format = swapChainImageFormat;
-
-                // Allows swizzling the colour channels around eg map all channels to the red channel
-                createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-                createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-                createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-                createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-                // Describes the images purpose and which part we want to access
-                createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-                createInfo.subresourceRange.baseMipLevel = 0;
-                createInfo.subresourceRange.levelCount = 1;
-                createInfo.subresourceRange.baseArrayLayer = 0;
-                createInfo.subresourceRange.layerCount = 1;
-
-                if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS) {
-                    throw std::runtime_error("failed to create image view");
-                }
+                swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
             }
         }
 
@@ -554,15 +543,24 @@ class FirstVulkanTriangleApplication {
         void createDescriptorSetLayout() {
             VkDescriptorSetLayoutBinding uboLayoutBinding{};
             uboLayoutBinding.binding = 0;
-            uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             uboLayoutBinding.descriptorCount = 1;
+            uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
             uboLayoutBinding.pImmutableSamplers = nullptr;
 
+            VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+            samplerLayoutBinding.binding = 1;
+            samplerLayoutBinding.descriptorCount = 1;
+            samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            samplerLayoutBinding.pImmutableSamplers = nullptr;
+            samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+            std::array bindings = {uboLayoutBinding, samplerLayoutBinding};
+
             VkDescriptorSetLayoutCreateInfo layoutInfo{};
             layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-            layoutInfo.bindingCount = 1;
-            layoutInfo.pBindings = &uboLayoutBinding;
+            layoutInfo.bindingCount = bindings.size();
+            layoutInfo.pBindings = bindings.data();
 
             if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
                 throw std::runtime_error("failed to create descriptor set layout");
@@ -785,19 +783,17 @@ class FirstVulkanTriangleApplication {
 
         void createTextureImage() {
             int texWidth, texHeight, texChannels;
-            stbi_uc *pixels = stbi_load("../textures/texture.jpg", &texWidth, &texHeight,
-                &texChannels, STBI_rgb_alpha);
+            stbi_uc* pixels = stbi_load("../textures/texture.jpg", &texWidth, &texHeight,
+                                        &texChannels, STBI_rgb_alpha);
             VkDeviceSize imageSize = texWidth * texHeight * 4;
-
-            VkFormat imageFormat = VK_FORMAT_R8G8B8A8_SRGB;
 
             if (!pixels) {
                 throw std::runtime_error("failed to load texture image");
             }
 
             createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                stagingBuffer, stagingBufferMemory);
+                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                         stagingBuffer, stagingBufferMemory);
 
             void* data;
             vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
@@ -806,17 +802,86 @@ class FirstVulkanTriangleApplication {
 
             stbi_image_free(pixels);
 
-            createImage(texWidth, texHeight, imageFormat, VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+            createImage(texWidth, texHeight, textureImageFormat, VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
 
             // Transition the image to be a destination for our buffer then transition to layout for shader access
-            transitionImageLayout(textureImage, imageFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            transitionImageLayout(textureImage, textureImageFormat, VK_IMAGE_LAYOUT_UNDEFINED,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             copyBufferToImage(stagingBuffer, textureImage, texWidth, texHeight);
-            transitionImageLayout(textureImage, imageFormat, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            transitionImageLayout(textureImage, textureImageFormat, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
             vkDestroyBuffer(device, stagingBuffer, nullptr);
             vkFreeMemory(device, stagingBufferMemory, nullptr);
+        }
+
+        void createTextureImageView() {
+            textureImageView = createImageView(textureImage, textureImageFormat);
+        }
+
+        void createTextureSampler() {
+            VkSamplerCreateInfo samplerInfo{};
+            samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            samplerInfo.magFilter = VK_FILTER_LINEAR;
+            samplerInfo.minFilter = VK_FILTER_LINEAR;
+            samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+
+            // TODO: Move this out to once for program run
+            VkPhysicalDeviceProperties properties{};
+            vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+
+            samplerInfo.anisotropyEnable = VK_TRUE;
+            samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy;
+
+            samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+            // texels addressed in the range [0,1]
+            samplerInfo.unnormalizedCoordinates = VK_FALSE;
+
+            samplerInfo.compareEnable = VK_FALSE;
+            samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+
+            samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            samplerInfo.mipLodBias = 0.0f;
+            samplerInfo.minLod = 0.0f;
+            samplerInfo.maxLod = 0.0f;
+
+            if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create texture sampler");
+            }
+        }
+
+        VkImageView createImageView(VkImage image, VkFormat format) {
+            VkImageViewCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            createInfo.image = image;
+
+            // Specifies how the image data should be interpreted
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            createInfo.format = format;
+
+            // Allows swizzling the colour channels around eg map all channels to the red channel
+            createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+            // Describes the images purpose and which part we want to access
+            createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            createInfo.subresourceRange.baseMipLevel = 0;
+            createInfo.subresourceRange.levelCount = 1;
+            createInfo.subresourceRange.baseArrayLayer = 0;
+            createInfo.subresourceRange.layerCount = 1;
+
+            VkImageView imageView = nullptr;
+            if (vkCreateImageView(device, &createInfo, nullptr, &imageView) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create image view");
+            }
+
+            return imageView;
         }
 
         void createVertexBuffer() {
@@ -896,23 +961,27 @@ class FirstVulkanTriangleApplication {
 
             for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
                 createBuffer(bufferSize, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                    uniformBuffers[i], uniformBuffersMemory[i]);
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                             uniformBuffers[i], uniformBuffersMemory[i]);
                 // Persistent Mapping
                 vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
             }
         }
 
         void createDescriptorPool() {
-            VkDescriptorPoolSize poolSize{};
-            poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            poolSize.descriptorCount = (uint32)MAX_FRAMES_IN_FLIGHT;
+            std::array<VkDescriptorPoolSize, 2> poolSizes{};
+
+            poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            poolSizes[0].descriptorCount = static_cast<uint32>(MAX_FRAMES_IN_FLIGHT);
+
+            poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            poolSizes[1].descriptorCount = static_cast<uint32>(MAX_FRAMES_IN_FLIGHT);
 
             VkDescriptorPoolCreateInfo poolInfo{};
             poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            poolInfo.poolSizeCount = 1;
-            poolInfo.pPoolSizes = &poolSize;
-            poolInfo.maxSets = (uint32)MAX_FRAMES_IN_FLIGHT;
+            poolInfo.poolSizeCount = poolSizes.size();
+            poolInfo.pPoolSizes = poolSizes.data();
+            poolInfo.maxSets = static_cast<uint32>(MAX_FRAMES_IN_FLIGHT);
             poolInfo.flags = 0;
 
             if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
@@ -927,7 +996,7 @@ class FirstVulkanTriangleApplication {
             allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             allocInfo.descriptorPool = descriptorPool;
             allocInfo.pSetLayouts = layouts.data();
-            allocInfo.descriptorSetCount = (uint32)MAX_FRAMES_IN_FLIGHT;
+            allocInfo.descriptorSetCount = static_cast<uint32>(MAX_FRAMES_IN_FLIGHT);
 
             descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
             if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS) {
@@ -941,18 +1010,35 @@ class FirstVulkanTriangleApplication {
                 bufferInfo.range = sizeof(UniformBufferObject);
                 bufferInfo.offset = 0;
 
-                VkWriteDescriptorSet descriptorSetWrite{};
-                descriptorSetWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                descriptorSetWrite.dstSet = descriptorSets[i];
-                descriptorSetWrite.dstBinding = 0;
-                descriptorSetWrite.dstArrayElement = 0;
-                descriptorSetWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                descriptorSetWrite.descriptorCount = 1;
-                descriptorSetWrite.pBufferInfo = &bufferInfo;
-                descriptorSetWrite.pImageInfo = nullptr;
-                descriptorSetWrite.pTexelBufferView = nullptr;
+                VkDescriptorImageInfo imageInfo{};
+                imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                imageInfo.imageView = textureImageView;
+                imageInfo.sampler = textureSampler;
 
-                vkUpdateDescriptorSets(device, 1, &descriptorSetWrite, 0, nullptr);
+                std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+
+                descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descriptorWrites[0].dstSet = descriptorSets[i];
+                descriptorWrites[0].dstBinding = 0;
+                descriptorWrites[0].dstArrayElement = 0;
+                descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                descriptorWrites[0].descriptorCount = 1;
+                descriptorWrites[0].pBufferInfo = &bufferInfo;
+                descriptorWrites[0].pImageInfo = nullptr;
+                descriptorWrites[0].pTexelBufferView = nullptr;
+
+                descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descriptorWrites[1].dstSet = descriptorSets[i];
+                descriptorWrites[1].dstBinding = 1;
+                descriptorWrites[1].dstArrayElement = 0;
+                descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                descriptorWrites[1].descriptorCount = 1;
+                descriptorWrites[1].pImageInfo = &imageInfo;
+                descriptorWrites[1].pTexelBufferView = nullptr;
+                descriptorWrites[1].pBufferInfo = nullptr;
+
+                vkUpdateDescriptorSets(device, descriptorWrites.size(),
+                                       descriptorWrites.data(), 0, nullptr);
             }
         }
 
@@ -1203,6 +1289,9 @@ class FirstVulkanTriangleApplication {
         void cleanup() {
             cleanupSwapChain();
 
+            vkDestroySampler(device, textureSampler, nullptr);
+            vkDestroyImageView(device, textureImageView, nullptr);
+
             vkDestroyImage(device, textureImage, nullptr);
             vkFreeMemory(device, textureImageMemory, nullptr);
 
@@ -1259,7 +1348,7 @@ class FirstVulkanTriangleApplication {
                 swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
             }
 
-            return indices.isComplete() && extensionSupported && swapChainAdequate;
+            return indices.isComplete() && extensionSupported && swapChainAdequate && deviceFeatures.samplerAnisotropy;
         }
 
         QueueFamilyIndices findQueueFamilies(VkPhysicalDevice physicalDevice) {
@@ -1465,13 +1554,13 @@ class FirstVulkanTriangleApplication {
             // Good resource https://learnopengl.com/Getting-started/Coordinate-Systems
             // This creates a rotation around the z-axis
             ubo.model = glm::rotate(glm::mat4(1.0f),
-                time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+                                    time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
             ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
-                glm::vec3(0.0f, 0.0f, 1.0f));
+                                   glm::vec3(0.0f, 0.0f, 1.0f));
 
             ubo.proj = glm::perspective(glm::radians(45.0f),
-                swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
+                                        swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
 
             // GLM is made for OpenGL where the clip Y coordinate is flipped
             ubo.proj[1][1] *= -1;
@@ -1517,46 +1606,45 @@ class FirstVulkanTriangleApplication {
         }
 
         void createImage(uint32 width, uint32 height, VkFormat format, VkImageTiling tiling, VkImageUsageFlags usage,
-                VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
+                         VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
+            VkImageCreateInfo imageInfo{};
+            imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.extent.width = width;
+            imageInfo.extent.height = height;
+            imageInfo.extent.depth = 1;
+            imageInfo.mipLevels = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.format = format;
+            // Only two options but we choose this as we are using a staging buffer instead of staging image
+            // TODO: Learn pro/cons of staging buffer vs staging image
+            imageInfo.tiling = tiling;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            imageInfo.usage = usage;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.flags = 0;
 
-                VkImageCreateInfo imageInfo{};
-                imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-                imageInfo.imageType = VK_IMAGE_TYPE_2D;
-                imageInfo.extent.width = width;
-                imageInfo.extent.height = height;
-                imageInfo.extent.depth = 1;
-                imageInfo.mipLevels = 1;
-                imageInfo.arrayLayers = 1;
-                imageInfo.format = format;
-                // Only two options but we choose this as we are using a staging buffer instead of staging image
-                // TODO: Learn pro/cons of staging buffer vs staging image
-                imageInfo.tiling = tiling;
-                imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                imageInfo.usage = usage;
-                imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-                imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-                imageInfo.flags = 0;
-
-                if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
-                    throw std::runtime_error("failed to create image");
-                }
-
-                SDL_Log("Image created");
-
-                VkMemoryRequirements memoryRequirements;
-                vkGetImageMemoryRequirements(device, image, &memoryRequirements);
-
-                VkMemoryAllocateInfo allocInfo{};
-                allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-                allocInfo.allocationSize = memoryRequirements.size;
-                allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
-
-                if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
-                    throw std::runtime_error("failed to allocate texture memory");
-                }
-
-                vkBindImageMemory(device, image, imageMemory, 0);
+            if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+                throw std::runtime_error("failed to create image");
             }
+
+            SDL_Log("Image created");
+
+            VkMemoryRequirements memoryRequirements;
+            vkGetImageMemoryRequirements(device, image, &memoryRequirements);
+
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize = memoryRequirements.size;
+            allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
+
+            if (vkAllocateMemory(device, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
+                throw std::runtime_error("failed to allocate texture memory");
+            }
+
+            vkBindImageMemory(device, image, imageMemory, 0);
+        }
 
         void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
             VkCommandBuffer commandBuffer = beginSingleTimeCommands();
@@ -1587,7 +1675,8 @@ class FirstVulkanTriangleApplication {
                 // Pipelines that must occur before/wait till after
                 srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
                 dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-            } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout ==
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
                 barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
                 barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
@@ -1600,11 +1689,11 @@ class FirstVulkanTriangleApplication {
             // src/dst stagemask specify in which pipeline stage the operations occur that should happen before/after
             // This table lists the allowed values https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap7.html#synchronization-access-types-supported
             vkCmdPipelineBarrier(commandBuffer,
-                srcStage, dstStage,
-                0,
-                0, nullptr,
-                0, nullptr,
-                1, &barrier);
+                                 srcStage, dstStage,
+                                 0,
+                                 0, nullptr,
+                                 0, nullptr,
+                                 1, &barrier);
 
             endSingleTimeCommands(commandBuffer);
         }
@@ -1628,7 +1717,6 @@ class FirstVulkanTriangleApplication {
             vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
             endSingleTimeCommands(commandBuffer);
         }
-
 };
 
 // Entry point for SDL3 with header inclusion
