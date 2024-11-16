@@ -4,6 +4,8 @@ project(engine)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(EXT_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/external/include")
+
 # SDL3 path configuration
 if(WIN32)
     set(SDL3_LIBRARY "${CMAKE_CURRENT_SOURCE_DIR}/external/SDL3/lib/x64/SDL3.lib")
@@ -15,8 +17,6 @@ else ()
     set(SDL3_LIBRARY "/usr/local/lib/libSDL3.dylib")
     set(SDL3_INCLUDE_DIR "/usr/local/include/SDL3")
 endif()
-
-
 
 # Your executable
 add_executable(${PROJECT_NAME}
@@ -41,6 +41,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Vulkan::Vulkan)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
+        ${EXT_INCLUDES}
         ${SDL3_INCLUDE_DIR}
         Vulkan::Vulkan
         ${GLM_INCLUDE_DIR}
