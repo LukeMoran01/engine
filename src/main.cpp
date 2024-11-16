@@ -30,6 +30,8 @@ typedef uint8_t uint8;
 #define global static
 #define persist static
 
+// TODO THIS IS A COMMENT REMOVE ME
+
 // Objects that are passed to the shaders require specific memory alignments
 // So lets be explicit even if it would aligned with the base typed already
 // https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap15.html#interfaces-resources-layout
