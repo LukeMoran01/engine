@@ -948,7 +948,7 @@ class FirstVulkanTriangleApplication {
                          stagingBuffer, stagingBufferMemory);
 
             // Now we have to copy the vertex data to the buffer
-            void* mappedMemory;
+            void* data;
             /*  This maps the buffer memory to CPU accessible memory, copy the data and unmap
              *  Of note, the data may not be copied immediately into the buffer memory and also the writes to the buffer
              *  may not be visible in the mapped memory yet. There are two solutions:
@@ -959,8 +959,8 @@ class FirstVulkanTriangleApplication {
              *  Also, this still does not guarantee the data is visible on the GPU yet. All we are guaranteed is that it
              *  will be completed before the next call to vkQueueSubmit
              */
-            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &mappedMemory);
-            memcpy(mappedMemory, indices.data(), bufferSize);
+            vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+            memcpy(data, indices.data(), bufferSize);
             vkUnmapMemory(device, stagingBufferMemory);
 
             createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
