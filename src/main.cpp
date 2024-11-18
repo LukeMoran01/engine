@@ -7,6 +7,7 @@
 #include <limits>
 #include <fstream>
 #include <chrono>
+#include <unordered_map>
 
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL.h>
@@ -15,8 +16,10 @@
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE // Use Vulkan depth range 0 - 1
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/hash.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -86,7 +89,21 @@ struct Vertex {
         attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
         return attributeDescriptions;
     }
+
+    bool operator==(const Vertex& other) const {
+        return pos == other.pos && color == other.color && texCoord == other.texCoord;
+    }
 };
+
+namespace std {
+    template <>
+    struct hash<Vertex> {
+        size_t operator()(const Vertex& vertex) const noexcept {
+            return ((hash<glm::vec3>()(vertex.pos) ^ (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+                (hash<glm::vec2>()(vertex.texCoord) << 1);
+        }
+    };
+}
 
 const uint8 MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -945,6 +962,8 @@ class FirstVulkanTriangleApplication {
                 throw std::runtime_error(err);
             }
 
+            std::unordered_map<Vertex, uint32> uniqueVertices{};
+
             for (const auto& shape : shapes) {
                 for (const auto& index : shape.mesh.indices) {
                     Vertex vertex{};
@@ -960,8 +979,12 @@ class FirstVulkanTriangleApplication {
                     };
                     vertex.color = {1.0f, 1.0f, 1.0f};
 
-                    vertices.push_back(vertex);
-                    indices.push_back(indices.size());
+                    if (!uniqueVertices.contains(vertex)) {
+                        uniqueVertices[vertex] = uniqueVertices.size();
+                        vertices.push_back(vertex);
+                    }
+
+                    indices.push_back(uniqueVertices[vertex]);
                 }
             }
         }
