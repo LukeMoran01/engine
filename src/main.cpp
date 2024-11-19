@@ -274,6 +274,11 @@ class FirstVulkanTriangleApplication {
         std::vector<VkSemaphore> renderFinishedSemaphores;
         std::vector<VkFence> inFlightFences;
 
+        VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkImage colorImage = nullptr;
+        VkDeviceMemory colorImageMemory = nullptr;
+        VkImageView colorImageView = nullptr;
+
         uint32 currentFrame = 0;
         bool staleSwapChain = false;
 
@@ -299,6 +304,7 @@ class FirstVulkanTriangleApplication {
             createDescriptorSetLayout();
             createGraphicsPipeline();
             createCommandPool();
+            createColorResources();
             createDepthResources();
             createFramebuffers();
             createTextureImage();
@@ -384,6 +390,7 @@ class FirstVulkanTriangleApplication {
             for (const auto& device : devices) {
                 if (isDeviceSuitable(device)) {
                     physicalDevice = device;
+                    msaaSamples = getMaxUsableSampleCount();
                     break;
                 }
             }
@@ -399,7 +406,7 @@ class FirstVulkanTriangleApplication {
             QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
             std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
-            std::set<uint32> uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
+            std::set uniqueQueueFamilies = {indices.graphicsFamily.value(), indices.presentFamily.value()};
 
             float queuePriority = 1.0f;
             for (uint32 queueFamily : uniqueQueueFamilies) {
@@ -414,6 +421,7 @@ class FirstVulkanTriangleApplication {
             // Would include things like geometry shaders, come back to it later
             VkPhysicalDeviceFeatures deviceFeatures{};
             deviceFeatures.samplerAnisotropy = VK_TRUE;
+            deviceFeatures.sampleRateShading = VK_TRUE;
 
             // Now make the device creation info and pass the above structs to it
             VkDeviceCreateInfo createInfo{};
@@ -521,7 +529,7 @@ class FirstVulkanTriangleApplication {
         void createRenderPass() {
             VkAttachmentDescription colorAttachment{};
             colorAttachment.format = swapChainImageFormat;
-            colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+            colorAttachment.samples = msaaSamples;
             // What to do with colour and depth data
             colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -529,15 +537,29 @@ class FirstVulkanTriangleApplication {
             colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
             VkAttachmentReference colorAttachmentReference{};
             colorAttachmentReference.attachment = 0;
             colorAttachmentReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+            VkAttachmentDescription colorAttachmentResolve{};
+            colorAttachmentResolve.format = swapChainImageFormat;
+            colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT;
+            colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+            VkAttachmentReference colorAttachmentResolveReference{};
+            colorAttachmentResolveReference.attachment = 2;
+            colorAttachmentResolveReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
             VkAttachmentDescription depthAttachment{};
             depthAttachment.format = findDepthFormat();
-            depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+            depthAttachment.samples = msaaSamples;
             depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
             depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -549,13 +571,15 @@ class FirstVulkanTriangleApplication {
             depthAttachmentReference.attachment = 1;
             depthAttachmentReference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-            std::array attachments = {colorAttachment, depthAttachment};
+            // This must match order in framebuffer creation
+            std::array attachments = {colorAttachment, depthAttachment, colorAttachmentResolve};
 
             VkSubpassDescription subpass{};
             subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
             subpass.colorAttachmentCount = 1;
             subpass.pColorAttachments = &colorAttachmentReference;
             subpass.pDepthStencilAttachment = &depthAttachmentReference;
+            subpass.pResolveAttachments = &colorAttachmentResolveReference;
 
             VkSubpassDependency subpassDependency{};
             subpassDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
@@ -702,9 +726,9 @@ class FirstVulkanTriangleApplication {
             // Disable multisampling for now
             VkPipelineMultisampleStateCreateInfo multisampleCreateInfo{};
             multisampleCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-            multisampleCreateInfo.sampleShadingEnable = VK_FALSE;
-            multisampleCreateInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-            multisampleCreateInfo.minSampleShading = 1.0f;
+            multisampleCreateInfo.sampleShadingEnable = VK_TRUE;
+            multisampleCreateInfo.rasterizationSamples = msaaSamples;
+            multisampleCreateInfo.minSampleShading = 0.5f;
             multisampleCreateInfo.pSampleMask = nullptr;
             multisampleCreateInfo.alphaToCoverageEnable = VK_FALSE;
             multisampleCreateInfo.alphaToOneEnable = VK_FALSE;
@@ -801,7 +825,7 @@ class FirstVulkanTriangleApplication {
         void createFramebuffers() {
             swapChainFramebuffers.resize(swapChainImageViews.size());
             for (uint64 i = 0; i < swapChainImageViews.size(); i++) {
-                std::array attachments = {swapChainImageViews[i], depthImageView};
+                std::array attachments = {colorImageView, depthImageView, swapChainImageViews[i]};
 
                 VkFramebufferCreateInfo framebufferCreateInfo{};
                 framebufferCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -840,10 +864,19 @@ class FirstVulkanTriangleApplication {
             SDL_Log("Command pool created");
         }
 
+        void createColorResources() {
+            VkFormat colorFormat = swapChainImageFormat;
+            createImage(swapChainExtent.width, swapChainExtent.height, 1, colorFormat, VK_IMAGE_TILING_OPTIMAL,
+                        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                        msaaSamples, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, colorImage, colorImageMemory);
+            colorImageView = createImageView(colorImage, 1, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+        }
+
         void createDepthResources() {
             VkFormat depthFormat = findDepthFormat();
             createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat, VK_IMAGE_TILING_OPTIMAL,
-                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, msaaSamples,
+                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                         depthImage, depthImageMemory);
             depthImageView = createImageView(depthImage, 1, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 
@@ -878,7 +911,7 @@ class FirstVulkanTriangleApplication {
 
             createImage(texWidth, texHeight, mipLevels, textureImageFormat, VK_IMAGE_TILING_OPTIMAL,
                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
+                        VK_SAMPLE_COUNT_1_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, textureImage, textureImageMemory);
 
             // Transition the image to be a destination for our buffer then transition to layout for shader access
             transitionImageLayout(textureImage, mipLevels, textureImageFormat, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -1348,6 +1381,7 @@ class FirstVulkanTriangleApplication {
 
             createSwapChain();
             createImageViews();
+            createColorResources();
             createDepthResources();
             createFramebuffers();
         }
@@ -1407,6 +1441,10 @@ class FirstVulkanTriangleApplication {
          */
         void cleanup() {
             cleanupSwapChain();
+
+            vkDestroyImageView(device, colorImageView, nullptr);
+            vkDestroyImage(device, colorImage, nullptr);
+            vkFreeMemory(device, colorImageMemory, nullptr);
 
             vkDestroySampler(device, textureSampler, nullptr);
             vkDestroyImageView(device, textureImageView, nullptr);
@@ -1726,7 +1764,7 @@ class FirstVulkanTriangleApplication {
         }
 
         void createImage(uint32 width, uint32 height, uint32 mipLevels, VkFormat format, VkImageTiling tiling,
-                         VkImageUsageFlags usage,
+                         VkImageUsageFlags usage, VkSampleCountFlagBits numSamples,
                          VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory) {
             VkImageCreateInfo imageInfo{};
             imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1743,7 +1781,7 @@ class FirstVulkanTriangleApplication {
             imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             imageInfo.usage = usage;
             imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.samples = numSamples;
             imageInfo.flags = 0;
 
             if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
@@ -1967,7 +2005,24 @@ class FirstVulkanTriangleApplication {
 
             endSingleTimeCommands(commandBuffer);
         }
+
+        VkSampleCountFlagBits getMaxUsableSampleCount() {
+            VkPhysicalDeviceProperties physicalDeviceProperties;
+            vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
+
+            VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts &
+                physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+
+            if (counts & VK_SAMPLE_COUNT_64_BIT) return VK_SAMPLE_COUNT_64_BIT;
+            if (counts & VK_SAMPLE_COUNT_32_BIT) return VK_SAMPLE_COUNT_32_BIT;
+            if (counts & VK_SAMPLE_COUNT_16_BIT) return VK_SAMPLE_COUNT_16_BIT;
+            if (counts & VK_SAMPLE_COUNT_8_BIT) return VK_SAMPLE_COUNT_8_BIT;
+            if (counts & VK_SAMPLE_COUNT_4_BIT) return VK_SAMPLE_COUNT_4_BIT;
+            if (counts & VK_SAMPLE_COUNT_2_BIT) return VK_SAMPLE_COUNT_2_BIT;
+            return VK_SAMPLE_COUNT_1_BIT;
+        }
 };
+
 
 // Entry point for SDL3 with header inclusion
 int main(int argc, char** argv) {
