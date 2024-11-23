@@ -3,3 +3,23 @@
 //
 
 #pragma once
+
+#include <vk_types.h>
+
+namespace vkinit {
+    VkCommandPoolCreateInfo createCommandPoolCreateInfo(uint32_t queueFamilyIndex, VkCommandPoolCreateFlags flags);
+
+    VkCommandBufferAllocateInfo createCommandBufferAllocInfo(VkCommandPool commandPool, uint32_t commandBufferCount);
+    VkCommandBufferBeginInfo createCommandBufferBeginInfo(VkCommandBufferUsageFlags flags);
+    VkCommandBufferSubmitInfo createCommandBufferSubmitInfo(VkCommandBuffer commandBuffer);
+
+    VkFenceCreateInfo createFenceCreateInfo(VkFenceCreateFlags flags);
+    VkSemaphoreCreateInfo createSemaphoreCreateInfo(VkSemaphoreCreateFlags flags);
+    VkSemaphoreSubmitInfo createSemaphoreSubmitInfo(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
+
+    VkSubmitInfo2 createSubmitInfo(VkCommandBufferSubmitInfo* bufferInfo,
+                                   VkSemaphoreSubmitInfo* signalSemaphoreInfo,
+                                   VkSemaphoreSubmitInfo* waitSemaphoreInfo);
+
+    VkImageSubresourceRange createImageSubresourceRange(VkImageAspectFlags flags);
+}
