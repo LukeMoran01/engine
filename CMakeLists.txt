@@ -28,6 +28,10 @@ add_executable(${PROJECT_NAME}
         src/vk_initializers.cpp
         src/vk_images.h
         src/vk_images.cpp
+        src/vk_descriptors.h
+        src/vk_descriptors.cpp
+        src/vk_pipelines.cpp
+        src/vk_pipelines.h
         # Add other source files here
 )
 add_subdirectory(external/fmt)
