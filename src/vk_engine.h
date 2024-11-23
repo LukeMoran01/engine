@@ -6,13 +6,34 @@
 
 #include <vk_types.h>
 
+#include <ranges>
+
+// TODO: Inefficient but general to use lambdas, could use arrays of specific vulkan handles
+struct DeletionQueue {
+    std::deque<std::function<void()>> deletionTasks;
+
+    void pushTask(std::function<void()>&& task) {
+        deletionTasks.push_back(task);
+    }
+
+    void flush() {
+        for (auto& deletionTask : std::ranges::reverse_view(deletionTasks)) {
+            deletionTask();
+        }
+        deletionTasks.clear();
+    }
+};
+
 struct FrameData {
     VkCommandPool commandPool;
     VkCommandBuffer mainCommandBuffer;
 
     VkSemaphore swapchainSemaphore, renderSemaphore;
     VkFence renderFence;
+
+    DeletionQueue deletionQueue;
 };
+
 
 constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -24,6 +45,10 @@ public:
     VkExtent2D windowExtent{1700, 900};
 
     struct SDL_Window* window{nullptr};
+
+    DeletionQueue mainDeletionQueue;
+
+    VmaAllocator allocator{nullptr};
 
     VkInstance instance{nullptr};
     VkDebugUtilsMessengerEXT debugMessenger{nullptr};
@@ -37,6 +62,9 @@ public:
     std::vector<VkImage> swapchainImages{};
     std::vector<VkImageView> swapchainImageViews{};
     VkExtent2D swapchainExtent{0};
+
+    AllocatedImage drawImage{nullptr};
+    VkExtent2D drawExtent{0};
 
     std::array<FrameData, MAX_FRAMES_IN_FLIGHT> frames;
     FrameData& getCurrentFrame() { return frames[frameNumber % MAX_FRAMES_IN_FLIGHT]; }
@@ -54,6 +82,8 @@ public:
 
     //draw loop
     void draw();
+
+    void drawBackground(VkCommandBuffer);
 
     //run main loop
     void run();

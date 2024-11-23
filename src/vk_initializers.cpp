@@ -103,3 +103,40 @@ VkSubmitInfo2 vkinit::createSubmitInfo(VkCommandBufferSubmitInfo* bufferInfo,
     return submitInfo;
 }
 
+VkImageCreateInfo vkinit::createImageCreateInfo(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent) {
+    VkImageCreateInfo createInfo{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    createInfo.pNext     = nullptr;
+    createInfo.imageType = VK_IMAGE_TYPE_2D;
+
+    createInfo.format = format;
+    createInfo.extent = extent;
+
+    createInfo.mipLevels   = 1;
+    createInfo.arrayLayers = 1;
+
+    createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    createInfo.usage  = usageFlags;
+
+    return createInfo;
+}
+
+VkImageViewCreateInfo
+vkinit::createImageViewCreateInfo(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags) {
+    VkImageViewCreateInfo createInfo{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    createInfo.pNext = nullptr;
+
+    createInfo.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
+    createInfo.format                          = format;
+    createInfo.image                           = image;
+    createInfo.subresourceRange.baseMipLevel   = 0;
+    createInfo.subresourceRange.levelCount     = 1;
+    createInfo.subresourceRange.baseArrayLayer = 0;
+    createInfo.subresourceRange.layerCount     = 1;
+    createInfo.subresourceRange.aspectMask     = aspectFlags;
+
+    return createInfo;
+}
+
+

@@ -22,4 +22,7 @@ namespace vkinit {
                                    VkSemaphoreSubmitInfo* waitSemaphoreInfo);
 
     VkImageSubresourceRange createImageSubresourceRange(VkImageAspectFlags flags);
+
+    VkImageCreateInfo createImageCreateInfo(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent);
+    VkImageViewCreateInfo createImageViewCreateInfo(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags);
 }
