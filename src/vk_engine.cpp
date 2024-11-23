@@ -9,6 +9,7 @@
 
 #include <vk_initializers.h>
 #include <vk_types.h>
+#include <vk_images.h>
 
 #include <chrono>
 #include <thread>
@@ -113,30 +114,103 @@ void VulkanEngine::destroySwapchain() {
     }
 }
 
+// QueueFamilyIndices queueFamilyIndices = findQueueFamilies(physicalDevice);
+//
+// VkCommandPoolCreateInfo commandPoolCreateInfo{};
+// commandPoolCreateInfo.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+// commandPoolCreateInfo.flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+// commandPoolCreateInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily.value();
+//
+// if (vkCreateCommandPool(device, &commandPoolCreateInfo, nullptr, &commandPool) != VK_SUCCESS) {
+//     throw std::runtime_error("failed to create command pool");
+// }
+//
+// SDL_Log("Command pool created");
+
 
 void VulkanEngine::initCommands() {
+    auto commandPoolInfo = vkinit::createCommandPoolCreateInfo(graphicsQueueFamily,
+                                                               VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VK_CHECK(vkCreateCommandPool(device, &commandPoolInfo, nullptr, &frames[i].commandPool));
+
+        auto allocInfo = vkinit::createCommandBufferAllocInfo(
+            frames[i].commandPool, 1);
+
+        VK_CHECK(vkAllocateCommandBuffers(device, &allocInfo, &frames[i].mainCommandBuffer));
+    }
 }
 
 void VulkanEngine::initSyncStructures() {
-}
+    auto fenceCreateInfo     = vkinit::createFenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
+    auto semaphoreCreateInfo = vkinit::createSemaphoreCreateInfo(0);
 
-// ReSharper disable once CppMemberFunctionMayBeConst
-void VulkanEngine::cleanup() {
-    if (isInitialized) {
-        destroySwapchain();
-        vkDestroySurfaceKHR(instance, surface, nullptr);
-        vkDestroyDevice(device, nullptr);
-        vkb::destroy_debug_utils_messenger(instance, debugMessenger);
-        vkDestroyInstance(instance, nullptr);
-        SDL_DestroyWindow(window);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        VK_CHECK(vkCreateFence(device, &fenceCreateInfo, nullptr, &frames[i].renderFence));
+
+        VK_CHECK(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frames[i].swapchainSemaphore));
+        VK_CHECK(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &frames[i].renderSemaphore));
     }
-
-    // clear engine pointer
-    loadedEngine = nullptr;
 }
 
+// https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap12.html#resources-image-layouts
 void VulkanEngine::draw() {
-    // nothing yet
+    VK_CHECK(vkWaitForFences(device, 1, &getCurrentFrame().renderFence, VK_TRUE, 1000000000));
+    VK_CHECK(vkResetFences(device, 1, &getCurrentFrame().renderFence));
+
+    uint32_t swapchainImageIndex = 0;
+    VK_CHECK(
+        vkAcquireNextImageKHR(device, swapchain, 1000000000, getCurrentFrame().swapchainSemaphore, nullptr,
+            &swapchainImageIndex));
+
+    auto cmdBuffer = getCurrentFrame().mainCommandBuffer;
+    VK_CHECK(vkResetCommandBuffer(cmdBuffer, 0));
+
+    auto beginInfo = vkinit::createCommandBufferBeginInfo(
+        VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+    VK_CHECK(vkBeginCommandBuffer(cmdBuffer, &beginInfo));
+
+    vkutil::transitionImage(cmdBuffer, swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED,
+                            VK_IMAGE_LAYOUT_GENERAL);
+
+    VkClearColorValue clearColorValue{};
+    float flash     = std::abs(std::sin(static_cast<float>(frameNumber) / 120.0f));
+    clearColorValue = {{0.0f, 0.0f, flash, 1.0f}};
+
+    auto clearRange = vkinit::createImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
+    vkCmdClearColorImage(cmdBuffer, swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_GENERAL, &clearColorValue, 1,
+                         &clearRange);
+
+    vkutil::transitionImage(cmdBuffer, swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+    VK_CHECK(vkEndCommandBuffer(cmdBuffer));
+
+    auto bufferInfo = vkinit::createCommandBufferSubmitInfo(cmdBuffer);
+
+    auto waitInfo = vkinit::createSemaphoreSubmitInfo(VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR,
+                                                      getCurrentFrame().swapchainSemaphore);
+    auto signalInfo = vkinit::createSemaphoreSubmitInfo(VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                                                        getCurrentFrame().renderSemaphore);
+
+    auto submitInfo = vkinit::createSubmitInfo(&bufferInfo, &signalInfo, &waitInfo);
+
+    VK_CHECK(vkQueueSubmit2(graphicsQueue, 1, &submitInfo, getCurrentFrame().renderFence));
+
+    VkPresentInfoKHR presentInfo{.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+    presentInfo.pNext          = nullptr;
+    presentInfo.pSwapchains    = &swapchain;
+    presentInfo.swapchainCount = 1;
+
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores    = &getCurrentFrame().renderSemaphore;
+
+    presentInfo.pImageIndices = &swapchainImageIndex;
+
+    VK_CHECK(vkQueuePresentKHR(graphicsQueue, &presentInfo));
+
+    frameNumber++;
 }
 
 void VulkanEngine::run() {
@@ -169,4 +243,28 @@ void VulkanEngine::run() {
 
         draw();
     }
+}
+
+// ReSharper disable once CppMemberFunctionMayBeConst
+void VulkanEngine::cleanup() {
+    if (isInitialized) {
+        vkDeviceWaitIdle(device);
+
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+            vkDestroyCommandPool(device, frames[i].commandPool, nullptr);
+
+            vkDestroyFence(device, frames[i].renderFence, nullptr);
+            vkDestroySemaphore(device, frames[i].renderSemaphore, nullptr);
+            vkDestroySemaphore(device, frames[i].swapchainSemaphore, nullptr);
+        }
+        destroySwapchain();
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+        vkDestroyDevice(device, nullptr);
+        vkb::destroy_debug_utils_messenger(instance, debugMessenger);
+        vkDestroyInstance(instance, nullptr);
+        SDL_DestroyWindow(window);
+    }
+
+    // clear engine pointer
+    loadedEngine = nullptr;
 }
