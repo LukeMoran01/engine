@@ -19,6 +19,8 @@
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
 
+#include "vk_pipelines.h"
+
 constexpr bool useValidationLayers    = true;
 constexpr std::array validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -47,6 +49,8 @@ void VulkanEngine::init() {
     initSwapchain();
     initCommands();
     initSyncStructures();
+    initDescriptors();
+    initPipelines();
 
     // everything went fine
     isInitialized = true;
@@ -186,6 +190,77 @@ void VulkanEngine::initSyncStructures() {
     }
 }
 
+void VulkanEngine::initDescriptors() {
+    std::vector<DescriptorAllocator::PoolSizeRatio> sizes = {
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}
+    };
+
+    globalDescriptorAllocator.initPool(device, 10, sizes);
+
+    DescriptorLayoutBuilder builder;
+    builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    drawImageDescriptorLayout = builder.build(device, VK_SHADER_STAGE_COMPUTE_BIT, nullptr, 0);
+
+    drawImageDescriptors = globalDescriptorAllocator.allocate(device, drawImageDescriptorLayout);
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    imageInfo.imageView   = drawImage.imageView;
+
+    VkWriteDescriptorSet drawImageWrite{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    drawImageWrite.pNext           = nullptr;
+    drawImageWrite.dstBinding      = 0;
+    drawImageWrite.dstSet          = drawImageDescriptors;
+    drawImageWrite.descriptorCount = 1;
+    drawImageWrite.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    drawImageWrite.pImageInfo      = &imageInfo;
+
+    vkUpdateDescriptorSets(device, 1, &drawImageWrite, 0, nullptr);
+
+    mainDeletionQueue.pushTask([&]() {
+        globalDescriptorAllocator.destroyPool(device);
+        vkDestroyDescriptorSetLayout(device, drawImageDescriptorLayout, nullptr);
+    });
+}
+
+void VulkanEngine::initPipelines() {
+    initBackgroundPipelines();
+}
+
+void VulkanEngine::initBackgroundPipelines() {
+    VkPipelineLayoutCreateInfo computeLayout{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    computeLayout.pNext          = nullptr;
+    computeLayout.pSetLayouts    = &drawImageDescriptorLayout;
+    computeLayout.setLayoutCount = 1;
+
+    VK_CHECK(vkCreatePipelineLayout(device, &computeLayout, nullptr, &gradientPipelineLayout));
+
+    VkShaderModule computeDrawShader;
+    if (!vkutil::loadShaderModule("../shaders/compiled/gradient.comp.spv", device, &computeDrawShader)) {
+        fmt::print("Failed to build compute shader\n");
+    }
+
+    VkPipelineShaderStageCreateInfo stageInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stageInfo.pNext  = nullptr;
+    stageInfo.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    stageInfo.module = computeDrawShader;
+    // This is the function to call in the shader - nice!
+    stageInfo.pName = "main";
+
+    VkComputePipelineCreateInfo computeCreateInfo{.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    computeCreateInfo.pNext  = nullptr;
+    computeCreateInfo.layout = gradientPipelineLayout;
+    computeCreateInfo.stage  = stageInfo;
+
+    VK_CHECK(vkCreateComputePipelines(device, nullptr, 1, &computeCreateInfo, nullptr, &gradientPipeline));
+
+    vkDestroyShaderModule(device, computeDrawShader, nullptr);
+    mainDeletionQueue.pushTask([&]() {
+        vkDestroyPipelineLayout(device, gradientPipelineLayout, nullptr);
+        vkDestroyPipeline(device, gradientPipeline, nullptr);
+    });
+}
+
 // https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap12.html#resources-image-layouts
 void VulkanEngine::draw() {
     VK_CHECK(vkWaitForFences(device, 1, &getCurrentFrame().renderFence, VK_TRUE, 1000000000));
@@ -252,12 +327,12 @@ void VulkanEngine::draw() {
 }
 
 void VulkanEngine::drawBackground(VkCommandBuffer commandBuffer) {
-    VkClearColorValue clearColorValue{};
-    float flash     = std::abs(std::sin(static_cast<float>(frameNumber) / 120.0f));
-    clearColorValue = {{0.0f, 0.0f, flash, 1.0f}};
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gradientPipeline);
 
-    auto clearRange = vkinit::createImageSubresourceRange(VK_IMAGE_ASPECT_COLOR_BIT);
-    vkCmdClearColorImage(commandBuffer, drawImage.image, VK_IMAGE_LAYOUT_GENERAL, &clearColorValue, 1, &clearRange);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, gradientPipelineLayout, 0, 1,
+                            &drawImageDescriptors, 0, nullptr);
+
+    vkCmdDispatch(commandBuffer, std::ceil(drawExtent.width / 16.0), std::ceil(drawExtent.height / 16.0), 1);
 }
 
 void VulkanEngine::run() {

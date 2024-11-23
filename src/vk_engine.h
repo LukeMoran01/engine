@@ -8,6 +8,8 @@
 
 #include <ranges>
 
+#include "vk_descriptors.h"
+
 // TODO: Inefficient but general to use lambdas, could use arrays of specific vulkan handles
 struct DeletionQueue {
     std::deque<std::function<void()>> deletionTasks;
@@ -61,16 +63,23 @@ public:
 
     std::vector<VkImage> swapchainImages{};
     std::vector<VkImageView> swapchainImageViews{};
-    VkExtent2D swapchainExtent{0};
+    VkExtent2D swapchainExtent{};
 
     AllocatedImage drawImage{nullptr};
-    VkExtent2D drawExtent{0};
+    VkExtent2D drawExtent{};
 
     std::array<FrameData, MAX_FRAMES_IN_FLIGHT> frames;
     FrameData& getCurrentFrame() { return frames[frameNumber % MAX_FRAMES_IN_FLIGHT]; }
 
-    VkQueue graphicsQueue{nullptr};
+    VkQueue graphicsQueue{};
     uint32_t graphicsQueueFamily{0};
+
+    DescriptorAllocator globalDescriptorAllocator{nullptr};
+    VkDescriptorSet drawImageDescriptors{nullptr};
+    VkDescriptorSetLayout drawImageDescriptorLayout{nullptr};
+
+    VkPipeline gradientPipeline{nullptr};
+    VkPipelineLayout gradientPipelineLayout{nullptr};
 
     static VulkanEngine& Get();
 
@@ -97,4 +106,9 @@ private:
 
     void initCommands();
     void initSyncStructures();
+
+    void initDescriptors();
+
+    void initPipelines();
+    void initBackgroundPipelines();
 };
