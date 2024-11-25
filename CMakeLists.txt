@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(EXT_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/external/include")
+set(imgui_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui")
 
 # SDL3 path configuration
 if (WIN32)
@@ -49,8 +50,29 @@ endif ()
 
 find_package(Vulkan REQUIRED)
 
+add_library(imgui_lib STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_demo.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+)
+
+target_include_directories(imgui_lib PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
+        ${SDL3_INCLUDE_DIR}
+)
+
+target_link_libraries(imgui_lib PUBLIC
+        Vulkan::Vulkan
+        ${SDL3_LIBRARY}
+)
+
 # Link SDL3
-target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Vulkan::Vulkan fmt::fmt vk-bootstrap::vk-bootstrap)
+target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Vulkan::Vulkan fmt::fmt vk-bootstrap::vk-bootstrap imgui_lib)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
@@ -58,6 +80,8 @@ target_include_directories(${PROJECT_NAME} PRIVATE
         ${SDL3_INCLUDE_DIR}
         Vulkan::Vulkan
         ${GLM_INCLUDE_DIR}
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
         "src"
 )
 
