@@ -111,4 +111,7 @@ private:
 
     void initPipelines();
     void initBackgroundPipelines();
+
+    void initImgui();
+    void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 };
