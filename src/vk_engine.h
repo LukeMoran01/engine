@@ -36,6 +36,21 @@ struct FrameData {
     DeletionQueue deletionQueue;
 };
 
+struct ComputePushConstants {
+    glm::vec4 data1;
+    glm::vec4 data2;
+    glm::vec4 data3;
+    glm::vec4 data4;
+};
+
+struct ComputeEffect {
+    const char* name;
+
+    VkPipeline pipeline;
+    VkPipelineLayout layout;
+
+    ComputePushConstants data;
+};
 
 constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -80,6 +95,9 @@ public:
 
     VkPipeline gradientPipeline{nullptr};
     VkPipelineLayout gradientPipelineLayout{nullptr};
+
+    std::vector<ComputeEffect> backgroundEffects{};
+    int currentBackgroundEffect{0};
 
     static VulkanEngine& Get();
 
