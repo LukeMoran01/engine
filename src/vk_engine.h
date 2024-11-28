@@ -99,6 +99,9 @@ public:
     std::vector<ComputeEffect> backgroundEffects{};
     int currentBackgroundEffect{0};
 
+    VkPipelineLayout trianglePipelineLayout;
+    VkPipeline trianglePipeline;
+
     static VulkanEngine& Get();
 
     //initializes everything in the engine
@@ -130,6 +133,10 @@ private:
     void initPipelines();
     void initBackgroundPipelines();
 
+    void drawGeometry(VkCommandBuffer commandBuffer);
+
     void initImgui();
     void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
+
+    void initTrianglePipeline();
 };

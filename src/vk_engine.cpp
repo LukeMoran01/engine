@@ -296,6 +296,7 @@ void VulkanEngine::initDescriptors() {
 
 void VulkanEngine::initPipelines() {
     initBackgroundPipelines();
+    initTrianglePipeline();
 }
 
 void VulkanEngine::initBackgroundPipelines() {
@@ -395,7 +396,13 @@ void VulkanEngine::draw() {
 
     drawBackground(cmdBuffer);
 
-    vkutil::transitionImage(cmdBuffer, drawImage.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkutil::transitionImage(cmdBuffer, drawImage.image, VK_IMAGE_LAYOUT_GENERAL,
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    drawGeometry(cmdBuffer);
+
+    vkutil::transitionImage(cmdBuffer, drawImage.image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
     vkutil::transitionImage(cmdBuffer, swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_UNDEFINED,
                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -453,6 +460,37 @@ void VulkanEngine::drawBackground(VkCommandBuffer commandBuffer) {
     vkCmdDispatch(commandBuffer, std::ceil(drawExtent.width / 16.0), std::ceil(drawExtent.height / 16.0), 1);
 }
 
+void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
+    auto colorAttachment = vkinit::createRenderAttachmentInfo(drawImage.imageView, nullptr,
+                                                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+    auto renderInfo = vkinit::createRenderInfo(drawExtent, &colorAttachment, nullptr);
+    vkCmdBeginRendering(commandBuffer, &renderInfo);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, trianglePipeline);
+
+    VkViewport viewport{};
+    viewport.x        = 0;
+    viewport.y        = 0;
+    viewport.width    = static_cast<float>(drawExtent.width);
+    viewport.height   = static_cast<float>(drawExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset        = {0, 0};
+    scissor.extent.width  = drawExtent.width;
+    scissor.extent.height = drawExtent.height;
+
+    vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+    vkCmdEndRendering(commandBuffer);
+}
+
 void VulkanEngine::run() {
     SDL_Event event;
     bool running = true;
@@ -506,6 +544,45 @@ void VulkanEngine::run() {
 
         draw();
     }
+}
+
+void VulkanEngine::initTrianglePipeline() {
+    VkShaderModule triangleFragShader;
+    if (!vkutil::loadShaderModule("../shaders/compiled/colored_triangle.frag.spv", device, &triangleFragShader)) {
+        fmt::print("Failed to build the triangle fragment shader module");
+    }
+
+    VkShaderModule triangleVertShader;
+    if (!vkutil::loadShaderModule("../shaders/compiled/colored_triangle.vert.spv", device, &triangleVertShader)) {
+        fmt::print("Failed to build the triangle vertex shader module");
+    }
+
+    auto pipelineInfo = vkinit::createPipelineLayoutCreateInfo();
+    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &trianglePipelineLayout));
+
+    PipelineBuilder pipelineBuilder;
+
+    pipelineBuilder.pipelineLayout = trianglePipelineLayout;
+    pipelineBuilder.setShaders(triangleVertShader, triangleFragShader);
+    pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    pipelineBuilder.setMultisamplingNone();
+    pipelineBuilder.disableBlending();
+    pipelineBuilder.disableDepthtest();
+
+    pipelineBuilder.setColorAttachmentFormat(drawImage.imageFormat);
+    pipelineBuilder.setDepthFormat(VK_FORMAT_UNDEFINED);
+
+    trianglePipeline = pipelineBuilder.buildPipeline(device);
+
+    vkDestroyShaderModule(device, triangleVertShader, nullptr);
+    vkDestroyShaderModule(device, triangleFragShader, nullptr);
+
+    mainDeletionQueue.pushTask([&]() {
+        vkDestroyPipelineLayout(device, trianglePipelineLayout, nullptr);
+        vkDestroyPipeline(device, trianglePipeline, nullptr);
+    });
 }
 
 // ReSharper disable once CppMemberFunctionMayBeConst
