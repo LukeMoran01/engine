@@ -28,4 +28,9 @@ namespace vkinit {
     VkRenderingAttachmentInfo createRenderAttachmentInfo(VkImageView view, VkClearValue* clear, VkImageLayout layout);
     VkRenderingInfo createRenderInfo(VkExtent2D extent, VkRenderingAttachmentInfo* colorAttachment,
                                      VkRenderingAttachmentInfo* depthAttachment);
+
+    VkPipelineShaderStageCreateInfo createPipelineShaderStageCreateInfo(VkShaderStageFlagBits stage,
+                                                                        VkShaderModule shaderModule, const char* entry);
+
+    VkPipelineLayoutCreateInfo createPipelineLayoutCreateInfo();
 }

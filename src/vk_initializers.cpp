@@ -169,4 +169,25 @@ VkRenderingInfo vkinit::createRenderInfo(VkExtent2D extent, VkRenderingAttachmen
     return renderInfo;
 }
 
+VkPipelineShaderStageCreateInfo vkinit::createPipelineShaderStageCreateInfo(
+    VkShaderStageFlagBits stage, VkShaderModule shaderModule, const char* entry) {
+    VkPipelineShaderStageCreateInfo info{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    info.pNext = nullptr;
 
+    info.stage  = stage;
+    info.module = shaderModule;
+    info.pName  = entry;
+    return info;
+}
+
+VkPipelineLayoutCreateInfo vkinit::createPipelineLayoutCreateInfo() {
+    VkPipelineLayoutCreateInfo info{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    info.pNext = nullptr;
+
+    info.flags                  = 0;
+    info.setLayoutCount         = 0;
+    info.pSetLayouts            = nullptr;
+    info.pushConstantRangeCount = 0;
+    info.pPushConstantRanges    = nullptr;
+    return info;
+}
