@@ -102,6 +102,15 @@ public:
     VkPipelineLayout trianglePipelineLayout;
     VkPipeline trianglePipeline;
 
+    VkPipelineLayout meshPipelineLayout;
+    VkPipeline meshPipeline;
+
+    GPUMeshBuffers rectangle;
+
+    VkFence immFence;
+    VkCommandBuffer immCommandBuffer;
+    VkCommandPool immCommandPool;
+
     static VulkanEngine& Get();
 
     //initializes everything in the engine
@@ -113,10 +122,12 @@ public:
     //draw loop
     void draw();
 
-    void drawBackground(VkCommandBuffer);
-
     //run main loop
     void run();
+
+    void drawBackground(VkCommandBuffer);
+
+    void immediateSubmit(std::function<void(VkCommandBuffer cmdBuffer)>&& function);
 
 private:
     void initVulkan();
@@ -133,10 +144,18 @@ private:
     void initPipelines();
     void initBackgroundPipelines();
 
+    void initDefaultData();
+
     void drawGeometry(VkCommandBuffer commandBuffer);
 
     void initImgui();
     void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 
     void initTrianglePipeline();
+    void initMeshPipeline();
+
+    AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+    void destroyBuffer(AllocatedBuffer buffer);
+
+    GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
 };
