@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(EXT_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/external/include")
 set(imgui_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui")
+set(fastgltf_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/external/fastgltf/include")
 
 # SDL3 path configuration
 if (WIN32)
@@ -33,6 +34,8 @@ add_executable(${PROJECT_NAME}
         src/vk_descriptors.cpp
         src/vk_pipelines.cpp
         src/vk_pipelines.h
+        src/vk_loader.cpp
+        src/vk_loader.h
         # Add other source files here
 )
 add_subdirectory(external/fmt)
@@ -49,6 +52,7 @@ if (WIN32)
 endif ()
 
 find_package(Vulkan REQUIRED)
+add_subdirectory("external/fastgltf")
 
 add_library(imgui_lib STATIC
         ${imgui_SOURCE_DIR}/imgui.cpp
@@ -72,10 +76,12 @@ target_link_libraries(imgui_lib PUBLIC
 )
 
 # Link SDL3
-target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Vulkan::Vulkan fmt::fmt vk-bootstrap::vk-bootstrap imgui_lib)
+target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Vulkan::Vulkan fmt::fmt vk-bootstrap::vk-bootstrap
+        imgui_lib fastgltf::fastgltf)
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
+        ${fastgltf_INCLUDES}
         ${EXT_INCLUDES}
         ${SDL3_INCLUDE_DIR}
         Vulkan::Vulkan
@@ -84,7 +90,3 @@ target_include_directories(${PROJECT_NAME} PRIVATE
         ${imgui_SOURCE_DIR}/backends
         "src"
 )
-
-message(STATUS "SDL3_DIR: ${SDL3_DIR}")
-message(STATUS "SDL3_LIBRARY: ${SDL3_LIBRARY}")
-message(STATUS "SDL3_INCLUDE_DIR: ${SDL3_INCLUDE_DIR}")
