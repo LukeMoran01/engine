@@ -26,6 +26,7 @@ namespace vkinit {
     VkImageCreateInfo createImageCreateInfo(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent);
     VkImageViewCreateInfo createImageViewCreateInfo(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags);
     VkRenderingAttachmentInfo createRenderAttachmentInfo(VkImageView view, VkClearValue* clear, VkImageLayout layout);
+    VkRenderingAttachmentInfo createDepthAttachmentInfo(VkImageView view, VkImageLayout layout);
     VkRenderingInfo createRenderInfo(VkExtent2D extent, VkRenderingAttachmentInfo* colorAttachment,
                                      VkRenderingAttachmentInfo* depthAttachment);
 
