@@ -9,6 +9,7 @@
 #include <ranges>
 
 #include "vk_descriptors.h"
+#include "vk_loader.h"
 
 // TODO: Inefficient but general to use lambdas, could use arrays of specific vulkan handles
 struct DeletionQueue {
@@ -81,6 +82,7 @@ public:
     VkExtent2D swapchainExtent{};
 
     AllocatedImage drawImage{nullptr};
+    AllocatedImage depthImage{nullptr};
     VkExtent2D drawExtent{};
 
     std::array<FrameData, MAX_FRAMES_IN_FLIGHT> frames;
@@ -99,17 +101,14 @@ public:
     std::vector<ComputeEffect> backgroundEffects{};
     int currentBackgroundEffect{0};
 
-    VkPipelineLayout trianglePipelineLayout;
-    VkPipeline trianglePipeline;
-
     VkPipelineLayout meshPipelineLayout;
     VkPipeline meshPipeline;
-
-    GPUMeshBuffers rectangle;
 
     VkFence immFence;
     VkCommandBuffer immCommandBuffer;
     VkCommandPool immCommandPool;
+
+    std::vector<std::shared_ptr<MeshAsset>> testMeshes;
 
     static VulkanEngine& Get();
 
@@ -128,6 +127,8 @@ public:
     void drawBackground(VkCommandBuffer);
 
     void immediateSubmit(std::function<void(VkCommandBuffer cmdBuffer)>&& function);
+
+    GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
 
 private:
     void initVulkan();
@@ -151,11 +152,8 @@ private:
     void initImgui();
     void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 
-    void initTrianglePipeline();
     void initMeshPipeline();
 
     AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
     void destroyBuffer(AllocatedBuffer buffer);
-
-    GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
 };
