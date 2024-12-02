@@ -611,9 +611,9 @@ void VulkanEngine::run() {
         ImGui::End();
 
         if (ImGui::Begin("monke")) {
-            ImGui::SliderFloat("X", &ViewTranslateX, -10, 10);
-            ImGui::SliderFloat("Y", &ViewTranslateY, -10, 10);
-            ImGui::SliderFloat("Z", &ViewTranslateZ, -10, 10);
+            ImGui::SliderFloat("X", &ViewTranslateX, -999, 10);
+            ImGui::SliderFloat("Y", &ViewTranslateY, -999, 10);
+            ImGui::SliderFloat("Z", &ViewTranslateZ, -999, 10);
         }
 
         ImGui::End();
@@ -653,7 +653,7 @@ void VulkanEngine::initMeshPipeline() {
     pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
     pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
     pipelineBuilder.setMultisamplingNone();
-    pipelineBuilder.disableBlending();
+    pipelineBuilder.enableBlendingAdditive();
     pipelineBuilder.enableDepthTest(true, VK_COMPARE_OP_LESS_OR_EQUAL);
 
     pipelineBuilder.setColorAttachmentFormat(drawImage.imageFormat);

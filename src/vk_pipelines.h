@@ -34,6 +34,8 @@ public:
     void setCullMode(VkCullModeFlags cullMode, VkFrontFace frontFace);
     void setMultisamplingNone();
     void disableBlending();
+    void enableBlendingAdditive();
+    void enableBlendingAlphaBlend();
     void setColorAttachmentFormat(VkFormat format);
     void setDepthFormat(VkFormat format);
     void disableDepthTest();
