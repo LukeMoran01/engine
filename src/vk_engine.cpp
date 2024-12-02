@@ -53,7 +53,7 @@ void VulkanEngine::init() {
     SDL_SetAppMetadata("Engine", "0.1.0", nullptr);
     // Hints are configuration variables, there are many more https://wiki.libsdl.org/SDL3/CategoryHints
     SDL_SetHint(SDL_HINT_EVENT_LOGGING, "1");
-    auto windowFlags = SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_VULKAN;
+    auto windowFlags = SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
     window = SDL_CreateWindow("Engine", static_cast<int>(windowExtent.width), static_cast<int>(windowExtent.height),
                               windowFlags);
 
@@ -206,13 +206,28 @@ void VulkanEngine::createSwapchain(uint32_t width, uint32_t height) {
     swapchainImageViews = vkbSwapchain.get_image_views().value();
 }
 
+void VulkanEngine::resizeSwapchain() {
+    vkDeviceWaitIdle(device);
+    destroySwapchain();
+
+    int w, h;
+    SDL_GetWindowSize(window, &w, &h);
+    windowExtent.width  = w;
+    windowExtent.height = h;
+
+    createSwapchain(w, h);
+    resizeRequested = false;
+}
+
 void VulkanEngine::initSwapchain() {
     createSwapchain(windowExtent.width, windowExtent.height);
 
     VkExtent3D drawImageExtent = {
-        .width = windowExtent.width,
-        .height = windowExtent.height,
-        .depth = 1
+        // .width = windowExtent.width,
+        // .height = windowExtent.height,
+        .width = 3840, // 4k resolution of PC monitor
+        .height = 2160,
+        .depth = 1,
     };
 
     drawImage.imageFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -421,9 +436,12 @@ void VulkanEngine::draw() {
     VK_CHECK(vkResetFences(device, 1, &getCurrentFrame().renderFence));
 
     uint32_t swapchainImageIndex = 0;
-    VK_CHECK(
-        vkAcquireNextImageKHR(device, swapchain, 1000000000, getCurrentFrame().swapchainSemaphore, nullptr,
-            &swapchainImageIndex));
+    auto e = vkAcquireNextImageKHR(device, swapchain, 1000000000, getCurrentFrame().swapchainSemaphore, nullptr,
+                                   &swapchainImageIndex);
+    if (e == VK_ERROR_OUT_OF_DATE_KHR) {
+        resizeRequested = true;
+        return;
+    }
 
     auto cmdBuffer = getCurrentFrame().mainCommandBuffer;
     VK_CHECK(vkResetCommandBuffer(cmdBuffer, 0));
@@ -431,8 +449,11 @@ void VulkanEngine::draw() {
     auto beginInfo = vkinit::createCommandBufferBeginInfo(
         VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
-    drawExtent.width  = drawImage.imageExtent.width;
-    drawExtent.height = drawImage.imageExtent.height;
+    drawExtent.width = static_cast<uint32_t>(static_cast<float>(std::min(
+            swapchainExtent.width, drawImage.imageExtent.width)) *
+        renderScale);
+    drawExtent.height = static_cast<uint32_t>(static_cast<float>(std::min(
+        swapchainExtent.height, drawImage.imageExtent.height)) * renderScale);
 
     VK_CHECK(vkBeginCommandBuffer(cmdBuffer, &beginInfo));
 
@@ -488,7 +509,10 @@ void VulkanEngine::draw() {
 
     presentInfo.pImageIndices = &swapchainImageIndex;
 
-    VK_CHECK(vkQueuePresentKHR(graphicsQueue, &presentInfo));
+    auto presentResult = vkQueuePresentKHR(graphicsQueue, &presentInfo);
+    if (presentResult == VK_ERROR_OUT_OF_DATE_KHR) {
+        resizeRequested = true;
+    }
 
     frameNumber++;
 }
@@ -590,11 +614,16 @@ void VulkanEngine::run() {
             continue;
         }
 
+        if (resizeRequested) {
+            resizeSwapchain();
+        }
+
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
         if (ImGui::Begin("background")) {
+            ImGui::SliderFloat("Render Scale", &renderScale, 0.1f, 1.0f);
             ComputeEffect& selected = backgroundEffects[currentBackgroundEffect];
 
             ImGui::Text("Selected effect: ", selected.name);

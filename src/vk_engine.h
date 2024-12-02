@@ -60,7 +60,9 @@ public:
     bool isInitialized{false};
     int frameNumber{0};
     bool stopRendering{false};
+    bool resizeRequested{false};
     VkExtent2D windowExtent{1700, 900};
+    float renderScale{1.0f};
 
     struct SDL_Window* window{nullptr};
 
@@ -136,6 +138,7 @@ private:
     void createSwapchain(uint32_t width, uint32_t height);
     void destroySwapchain();
     void initSwapchain();
+    void resizeSwapchain();
 
     void initCommands();
     void initSyncStructures();
