@@ -333,24 +333,36 @@ void VulkanEngine::initDescriptors() {
 
     drawImageDescriptors = globalDescriptorAllocator.allocate(device, drawImageDescriptorLayout);
 
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    imageInfo.imageView   = drawImage.imageView;
+    DescriptorWriter dWriter;
 
-    VkWriteDescriptorSet drawImageWrite{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    drawImageWrite.pNext           = nullptr;
-    drawImageWrite.dstBinding      = 0;
-    drawImageWrite.dstSet          = drawImageDescriptors;
-    drawImageWrite.descriptorCount = 1;
-    drawImageWrite.descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    drawImageWrite.pImageInfo      = &imageInfo;
-
-    vkUpdateDescriptorSets(device, 1, &drawImageWrite, 0, nullptr);
+    dWriter.writeImage(0, drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+    dWriter.updateSet(device, drawImageDescriptors);
 
     mainDeletionQueue.pushTask([&]() {
         globalDescriptorAllocator.destroyPool(device);
         vkDestroyDescriptorSetLayout(device, drawImageDescriptorLayout, nullptr);
     });
+
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        std::vector<DescriptorAllocatorGrowable::PoolSizeRatio> frameSizes = {
+            {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3},
+            {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3},
+            {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3},
+            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4},
+        };
+
+        frames[i].frameDescriptors = DescriptorAllocatorGrowable{};
+        frames[i].frameDescriptors.init(device, 1000, frameSizes);
+
+        mainDeletionQueue.pushTask([&]() {
+            frames[i].frameDescriptors.destroyPools(device);
+        });
+    }
+
+    DescriptorLayoutBuilder gpuSceneDataBuilder;
+    gpuSceneDataBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    gpuSceneDataDescriptorLayout = gpuSceneDataBuilder.build(
+        device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr, 0);
 }
 
 void VulkanEngine::initPipelines() {
@@ -433,6 +445,8 @@ void VulkanEngine::initBackgroundPipelines() {
 void VulkanEngine::draw() {
     VK_CHECK(vkWaitForFences(device, 1, &getCurrentFrame().renderFence, VK_TRUE, 1000000000));
     getCurrentFrame().deletionQueue.flush();
+    getCurrentFrame().frameDescriptors.clearPools(device);
+
     VK_CHECK(vkResetFences(device, 1, &getCurrentFrame().renderFence));
 
     uint32_t swapchainImageIndex = 0;
@@ -483,7 +497,8 @@ void VulkanEngine::draw() {
 
     drawImgui(cmdBuffer, swapchainImageViews[swapchainImageIndex]);
 
-    vkutil::transitionImage(cmdBuffer, swapchainImages[swapchainImageIndex], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    vkutil::transitionImage(cmdBuffer, swapchainImages[swapchainImageIndex],
+                            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
     VK_CHECK(vkEndCommandBuffer(cmdBuffer));
@@ -532,6 +547,23 @@ void VulkanEngine::drawBackground(VkCommandBuffer commandBuffer) {
 }
 
 void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
+    AllocatedBuffer gpuSceneDataBuffer = createBuffer(sizeof(GPUSceneData), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                                      VMA_MEMORY_USAGE_CPU_TO_GPU);
+    getCurrentFrame().deletionQueue.pushTask([=, this]() {
+        destroyBuffer(gpuSceneDataBuffer);
+    });
+
+    // Get a pointer to the GPU accessible memory and copy in our GPU scene data
+    auto sceneUniformData = static_cast<GPUSceneData*>(gpuSceneDataBuffer.allocation->GetMappedData());
+    *sceneUniformData     = sceneData;
+
+    VkDescriptorSet globalDescriptor = getCurrentFrame().frameDescriptors.allocate(
+        device, gpuSceneDataDescriptorLayout, nullptr);
+
+    DescriptorWriter writer;
+    writer.writeBuffer(0, gpuSceneDataBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    writer.updateSet(device, globalDescriptor);
+
     auto colorAttachment = vkinit::createRenderAttachmentInfo(drawImage.imageView, nullptr,
                                                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     auto depthAttachment = vkinit::createDepthAttachmentInfo(depthImage.imageView,
@@ -575,11 +607,13 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
     pushConstants.worldMatrix  = projection * view;
     pushConstants.vertexBuffer = testMeshes[2]->meshBuffers.vertexBufferAddress;
 
-    vkCmdPushConstants(commandBuffer, meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(GPUDrawPushConstants),
+    vkCmdPushConstants(commandBuffer, meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                       sizeof(GPUDrawPushConstants),
                        &pushConstants);
     vkCmdBindIndexBuffer(commandBuffer, testMeshes[2]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-    vkCmdDrawIndexed(commandBuffer, testMeshes[2]->surfaces[0].count, 1, testMeshes[2]->surfaces[0].startIndex, 0, 0);
+    vkCmdDrawIndexed(commandBuffer, testMeshes[2]->surfaces[0].count, 1, testMeshes[2]->surfaces[0].startIndex, 0,
+                     0);
 
     vkCmdEndRendering(commandBuffer);
 }
@@ -659,7 +693,8 @@ void VulkanEngine::initMeshPipeline() {
     }
 
     VkShaderModule triangleVertShader;
-    if (!vkutil::loadShaderModule("../shaders/compiled/colored_triangle_mesh.vert.spv", device, &triangleVertShader)) {
+    if (!vkutil::loadShaderModule("../shaders/compiled/colored_triangle_mesh.vert.spv", device,
+                                  &triangleVertShader)) {
         fmt::print("Failed to build the mesh vertex shader module");
     }
 

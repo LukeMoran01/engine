@@ -35,6 +35,7 @@ struct FrameData {
     VkFence renderFence;
 
     DeletionQueue deletionQueue;
+    DescriptorAllocatorGrowable frameDescriptors;
 };
 
 struct ComputePushConstants {
@@ -51,6 +52,15 @@ struct ComputeEffect {
     VkPipelineLayout layout;
 
     ComputePushConstants data;
+};
+
+struct GPUSceneData {
+    glm::mat4 view;
+    glm::mat4 proj;
+    glm::mat4 viewProj;
+    glm::mat4 ambientColor;
+    glm::mat4 sunlightDirection;
+    glm::mat4 sunlightColor;
 };
 
 constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
@@ -109,6 +119,9 @@ public:
     VkFence immFence;
     VkCommandBuffer immCommandBuffer;
     VkCommandPool immCommandPool;
+
+    GPUSceneData sceneData;
+    VkDescriptorSetLayout gpuSceneDataDescriptorLayout;
 
     std::vector<std::shared_ptr<MeshAsset>> testMeshes;
 
