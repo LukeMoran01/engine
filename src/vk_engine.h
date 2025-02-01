@@ -125,6 +125,16 @@ public:
 
     std::vector<std::shared_ptr<MeshAsset>> testMeshes;
 
+    AllocatedImage whiteImage;
+    AllocatedImage blackImage;
+    AllocatedImage greyImage;
+    AllocatedImage errorCheckerboardImage;
+
+    VkSampler defaultSamplerLinear;
+    VkSampler defaultSamplerNearest;
+
+    VkDescriptorSetLayout singleImageDescriptorLayout;
+
     static VulkanEngine& Get();
 
     //initializes everything in the engine
@@ -172,4 +182,8 @@ private:
 
     AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
     void destroyBuffer(AllocatedBuffer buffer);
+
+    AllocatedImage createImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped);
+    AllocatedImage createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped);
+    void destroyImage(const AllocatedImage& image);
 };

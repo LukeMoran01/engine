@@ -27,6 +27,7 @@
 #define GLM_ENABLE_EXPERIMENTAL
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #define GLM_FORCE_RADIANS
+#include <iostream>
 #include <glm/gtx/transform.hpp>
 
 constexpr bool useValidationLayers    = true;
@@ -74,6 +75,48 @@ void VulkanEngine::init() {
 
 void VulkanEngine::initDefaultData() {
     testMeshes = loadGltfMeshes(this, "../assets/basicmesh.glb").value();
+
+    uint32_t white = packUnorm4x8(glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+    whiteImage     = createImage(&white, VkExtent3D{1, 1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+                                 VK_IMAGE_USAGE_SAMPLED_BIT, false);
+
+    uint32_t grey = packUnorm4x8(glm::vec4(0.66f, 0.66f, 0.66f, 1.0f));
+    greyImage     = createImage(&grey, VkExtent3D{1, 1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+                                VK_IMAGE_USAGE_SAMPLED_BIT, false);
+
+    uint32_t black = 0x00000000;
+    blackImage     = createImage(&black, VkExtent3D{1, 1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+                                 VK_IMAGE_USAGE_SAMPLED_BIT, false);
+
+    uint32_t magenta = glm::packUnorm4x8(glm::vec4(1, 0, 1, 1));
+
+    std::array<uint32_t, 16 * 16> pixels{};
+    for (int i = 0; i < 16; i++) {
+        for (int j = 0; j < 16; j++) {
+            pixels[j * 16 + i] = ((i % 2) ^ (j % 2)) ? magenta : black;
+        }
+    }
+    errorCheckerboardImage = createImage(pixels.data(), VkExtent3D{16, 16, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+                                         VK_IMAGE_USAGE_SAMPLED_BIT, false);
+
+    VkSamplerCreateInfo samplerInfo{.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    vkCreateSampler(device, &samplerInfo, nullptr, &defaultSamplerNearest);
+
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    vkCreateSampler(device, &samplerInfo, nullptr, &defaultSamplerLinear);
+
+    mainDeletionQueue.pushTask([&]() {
+        vkDestroySampler(device, defaultSamplerNearest, nullptr);
+        vkDestroySampler(device, defaultSamplerLinear, nullptr);
+
+        destroyImage(whiteImage);
+        destroyImage(greyImage);
+        destroyImage(blackImage);
+        destroyImage(errorCheckerboardImage);
+    });
 }
 
 
@@ -171,7 +214,7 @@ void VulkanEngine::initImgui() {
     ImGui_ImplVulkan_Init(&initInfo);
     ImGui_ImplVulkan_CreateFontsTexture();
 
-    mainDeletionQueue.pushTask([&]() {
+    mainDeletionQueue.pushTask([=]() {
         ImGui_ImplVulkan_Shutdown();
         vkDestroyDescriptorPool(device, imguiPool, nullptr);
     });
@@ -327,9 +370,11 @@ void VulkanEngine::initDescriptors() {
 
     globalDescriptorAllocator.initPool(device, 10, sizes);
 
-    DescriptorLayoutBuilder builder;
-    builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
-    drawImageDescriptorLayout = builder.build(device, VK_SHADER_STAGE_COMPUTE_BIT, nullptr, 0);
+    {
+        DescriptorLayoutBuilder builder;
+        builder.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+        drawImageDescriptorLayout = builder.build(device, VK_SHADER_STAGE_COMPUTE_BIT, nullptr, 0);
+    }
 
     drawImageDescriptors = globalDescriptorAllocator.allocate(device, drawImageDescriptorLayout);
 
@@ -337,11 +382,6 @@ void VulkanEngine::initDescriptors() {
 
     dWriter.writeImage(0, drawImage.imageView, nullptr, VK_IMAGE_LAYOUT_GENERAL, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
     dWriter.updateSet(device, drawImageDescriptors);
-
-    mainDeletionQueue.pushTask([&]() {
-        globalDescriptorAllocator.destroyPool(device);
-        vkDestroyDescriptorSetLayout(device, drawImageDescriptorLayout, nullptr);
-    });
 
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
         std::vector<DescriptorAllocatorGrowable::PoolSizeRatio> frameSizes = {
@@ -354,15 +394,29 @@ void VulkanEngine::initDescriptors() {
         frames[i].frameDescriptors = DescriptorAllocatorGrowable{};
         frames[i].frameDescriptors.init(device, 1000, frameSizes);
 
-        mainDeletionQueue.pushTask([&]() {
+        mainDeletionQueue.pushTask([&, i]() {
             frames[i].frameDescriptors.destroyPools(device);
         });
     }
 
-    DescriptorLayoutBuilder gpuSceneDataBuilder;
-    gpuSceneDataBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-    gpuSceneDataDescriptorLayout = gpuSceneDataBuilder.build(
-        device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr, 0);
+    {
+        DescriptorLayoutBuilder builder;
+        builder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+        gpuSceneDataDescriptorLayout = builder.build(
+            device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr, 0);
+    }
+
+    DescriptorLayoutBuilder singleImageBuilder;
+    // Combined is less efficient according to gpu vendors but simpler
+    singleImageBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    singleImageDescriptorLayout = singleImageBuilder.build(device, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr, 0);
+
+    mainDeletionQueue.pushTask([&]() {
+        globalDescriptorAllocator.destroyPool(device);
+        vkDestroyDescriptorSetLayout(device, drawImageDescriptorLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, singleImageDescriptorLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, gpuSceneDataDescriptorLayout, nullptr);
+    });
 }
 
 void VulkanEngine::initPipelines() {
@@ -434,7 +488,7 @@ void VulkanEngine::initBackgroundPipelines() {
 
     vkDestroyShaderModule(device, gradientShader, nullptr);
     vkDestroyShaderModule(device, skyShader, nullptr);
-    mainDeletionQueue.pushTask([&]() {
+    mainDeletionQueue.pushTask([=]() {
         vkDestroyPipelineLayout(device, gradientPipelineLayout, nullptr);
         vkDestroyPipeline(device, gradient.pipeline, nullptr);
         vkDestroyPipeline(device, sky.pipeline, nullptr);
@@ -560,9 +614,11 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
     VkDescriptorSet globalDescriptor = getCurrentFrame().frameDescriptors.allocate(
         device, gpuSceneDataDescriptorLayout, nullptr);
 
-    DescriptorWriter writer;
-    writer.writeBuffer(0, gpuSceneDataBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-    writer.updateSet(device, globalDescriptor);
+    {
+        DescriptorWriter writer;
+        writer.writeBuffer(0, gpuSceneDataBuffer.buffer, sizeof(GPUSceneData), 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+        writer.updateSet(device, globalDescriptor);
+    }
 
     auto colorAttachment = vkinit::createRenderAttachmentInfo(drawImage.imageView, nullptr,
                                                               VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -571,8 +627,6 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
 
     auto renderInfo = vkinit::createRenderInfo(drawExtent, &colorAttachment, &depthAttachment);
     vkCmdBeginRendering(commandBuffer, &renderInfo);
-
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
 
     VkViewport viewport{};
     viewport.x        = 0;
@@ -591,6 +645,20 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
 
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
+
+    VkDescriptorSet imageSet = getCurrentFrame().frameDescriptors.
+                                                 allocate(device, singleImageDescriptorLayout, nullptr);
+    {
+        DescriptorWriter writer;
+        writer.writeImage(0, errorCheckerboardImage.imageView, defaultSamplerNearest,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        writer.updateSet(device, imageSet);
+    }
+
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineLayout, 0, 1, &imageSet, 0,
+                            nullptr);
+
     glm::mat4 view = glm::translate(glm::vec3{ViewTranslateX, ViewTranslateY, ViewTranslateZ});
 
     // Reversing the depth so that 0 is the far plane apparently greatly improves the quality of depth testing.. ?
@@ -603,7 +671,6 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
     projection[1][1] *= -1;
 
     GPUDrawPushConstants pushConstants{};
-
     pushConstants.worldMatrix  = projection * view;
     pushConstants.vertexBuffer = testMeshes[2]->meshBuffers.vertexBufferAddress;
 
@@ -674,9 +741,9 @@ void VulkanEngine::run() {
         ImGui::End();
 
         if (ImGui::Begin("monke")) {
-            ImGui::SliderFloat("X", &ViewTranslateX, -999, 10);
-            ImGui::SliderFloat("Y", &ViewTranslateY, -999, 10);
-            ImGui::SliderFloat("Z", &ViewTranslateZ, -999, 10);
+            ImGui::SliderFloat("X", &ViewTranslateX, -10, 10);
+            ImGui::SliderFloat("Y", &ViewTranslateY, -10, 10);
+            ImGui::SliderFloat("Z", &ViewTranslateZ, -10, 10);
         }
 
         ImGui::End();
@@ -688,7 +755,7 @@ void VulkanEngine::run() {
 
 void VulkanEngine::initMeshPipeline() {
     VkShaderModule triangleFragShader;
-    if (!vkutil::loadShaderModule("../shaders/compiled/colored_triangle.frag.spv", device, &triangleFragShader)) {
+    if (!vkutil::loadShaderModule("../shaders/compiled/tex_image.frag.spv", device, &triangleFragShader)) {
         fmt::print("Failed to build the mesh fragment shader module");
     }
 
@@ -706,6 +773,8 @@ void VulkanEngine::initMeshPipeline() {
     auto pipelineInfo                   = vkinit::createPipelineLayoutCreateInfo();
     pipelineInfo.pPushConstantRanges    = &bufferRange;
     pipelineInfo.pushConstantRangeCount = 1;
+    pipelineInfo.pSetLayouts            = &singleImageDescriptorLayout;
+    pipelineInfo.setLayoutCount         = 1;
 
     VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &meshPipelineLayout));
 
@@ -717,8 +786,8 @@ void VulkanEngine::initMeshPipeline() {
     pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
     pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
     pipelineBuilder.setMultisamplingNone();
-    pipelineBuilder.enableBlendingAdditive();
-    pipelineBuilder.enableDepthTest(true, VK_COMPARE_OP_LESS_OR_EQUAL);
+    pipelineBuilder.enableBlendingAlphaBlend();
+    pipelineBuilder.enableDepthTest(true, VK_COMPARE_OP_LESS_OR_EQUAL); //TODO WHEN depth stuff is weird check here ?
 
     pipelineBuilder.setColorAttachmentFormat(drawImage.imageFormat);
     pipelineBuilder.setDepthFormat(depthImage.imageFormat);
@@ -861,3 +930,70 @@ void VulkanEngine::immediateSubmit(std::function<void(VkCommandBuffer cmdBuffer)
     VK_CHECK(vkWaitForFences(device, 1, &immFence, true, 9999999999));
 }
 
+AllocatedImage VulkanEngine::createImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped) {
+    AllocatedImage newImage{};
+    newImage.imageFormat = format;
+    newImage.imageExtent = size;
+
+    auto imageInfo = vkinit::createImageCreateInfo(format, usage, size);
+    if (mipmapped) {
+        imageInfo.mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(size.width, size.height)))) + 1;
+    }
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage         = VMA_MEMORY_USAGE_GPU_ONLY;
+    allocInfo.requiredFlags = static_cast<VkMemoryPropertyFlags>(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VK_CHECK(vmaCreateImage(allocator, &imageInfo, &allocInfo, &newImage.image, &newImage.allocation, nullptr));
+
+    VkImageAspectFlags aspectFlag = VK_IMAGE_ASPECT_COLOR_BIT;
+    if (format == VK_FORMAT_D32_SFLOAT) {
+        aspectFlag = VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+
+    auto viewInfo                        = vkinit::createImageViewCreateInfo(format, newImage.image, aspectFlag);
+    viewInfo.subresourceRange.levelCount = imageInfo.mipLevels;
+
+    VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &newImage.imageView));
+
+    return newImage;
+}
+
+AllocatedImage VulkanEngine::createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage,
+                                         bool mipmapped) {
+    // Hard coded to expect RGBA 8 bit
+    size_t dataSize   = size.depth * size.width * size.height * 4;
+    auto uploadBuffer = createBuffer(dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+    memcpy(uploadBuffer.allocationInfo.pMappedData, data, dataSize);
+    auto newImage = createImage(size, format, usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                mipmapped);
+    immediateSubmit([&](VkCommandBuffer cmd) {
+        vkutil::transitionImage(cmd, newImage.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        VkBufferImageCopy copyRegion{};
+        copyRegion.bufferOffset      = 0;
+        copyRegion.bufferRowLength   = 0;
+        copyRegion.bufferImageHeight = 0;
+
+        copyRegion.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.imageSubresource.mipLevel       = 0;
+        copyRegion.imageSubresource.baseArrayLayer = 0;
+        copyRegion.imageSubresource.layerCount     = 1;
+        copyRegion.imageExtent                     = size;
+
+        vkCmdCopyBufferToImage(cmd, uploadBuffer.buffer, newImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &copyRegion);
+
+        vkutil::transitionImage(cmd, newImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    });
+
+    destroyBuffer(uploadBuffer);
+
+    return newImage;
+}
+
+void VulkanEngine::destroyImage(const AllocatedImage& image) {
+    vkDestroyImageView(device, image.imageView, nullptr);
+    vmaDestroyImage(allocator, image.image, image.allocation);
+}
