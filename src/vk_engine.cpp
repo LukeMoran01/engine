@@ -117,6 +117,29 @@ void VulkanEngine::initDefaultData() {
         destroyImage(blackImage);
         destroyImage(errorCheckerboardImage);
     });
+
+    GLTFMetallic_Roughness::MaterialResources materialResources{};
+    materialResources.colorImage        = whiteImage;
+    materialResources.colorSampler      = defaultSamplerLinear;
+    materialResources.metalRoughImage   = whiteImage;
+    materialResources.metalRoughSampler = defaultSamplerLinear;
+
+    AllocatedBuffer materialConstants = createBuffer(sizeof(GLTFMetallic_Roughness::MaterialConstants),
+                                                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+    auto sceneUniformData = static_cast<GLTFMetallic_Roughness::MaterialConstants*>(materialConstants.allocation->
+        GetMappedData());
+    sceneUniformData->colorFactors        = glm::vec4{1, 1, 1, 1};
+    sceneUniformData->metal_rough_factors = glm::vec4{1, 0.5, 0, 0};
+
+    mainDeletionQueue.pushTask([=, this]() {
+        destroyBuffer(materialConstants);
+    });
+
+    materialResources.dataBuffer       = materialConstants.buffer;
+    materialResources.dataBufferOffset = 0;
+
+    defaultData = metalRoughMaterial.writeMaterial(device, MaterialPass::MainColor, materialResources,
+                                                   globalDescriptorAllocator);
 }
 
 
@@ -214,7 +237,7 @@ void VulkanEngine::initImgui() {
     ImGui_ImplVulkan_Init(&initInfo);
     ImGui_ImplVulkan_CreateFontsTexture();
 
-    mainDeletionQueue.pushTask([=]() {
+    mainDeletionQueue.pushTask([=, *this]() {
         ImGui_ImplVulkan_Shutdown();
         vkDestroyDescriptorPool(device, imguiPool, nullptr);
     });
@@ -364,11 +387,12 @@ void VulkanEngine::initSyncStructures() {
 }
 
 void VulkanEngine::initDescriptors() {
-    std::vector<DescriptorAllocator::PoolSizeRatio> sizes = {
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}
+    std::vector<DescriptorAllocatorGrowable::PoolSizeRatio> sizes = {
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1}
     };
 
-    globalDescriptorAllocator.initPool(device, 10, sizes);
+    globalDescriptorAllocator.init(device, 10, sizes);
 
     {
         DescriptorLayoutBuilder builder;
@@ -376,7 +400,7 @@ void VulkanEngine::initDescriptors() {
         drawImageDescriptorLayout = builder.build(device, VK_SHADER_STAGE_COMPUTE_BIT, nullptr, 0);
     }
 
-    drawImageDescriptors = globalDescriptorAllocator.allocate(device, drawImageDescriptorLayout);
+    drawImageDescriptors = globalDescriptorAllocator.allocate(device, drawImageDescriptorLayout, nullptr);
 
     DescriptorWriter dWriter;
 
@@ -412,7 +436,7 @@ void VulkanEngine::initDescriptors() {
     singleImageDescriptorLayout = singleImageBuilder.build(device, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr, 0);
 
     mainDeletionQueue.pushTask([&]() {
-        globalDescriptorAllocator.destroyPool(device);
+        globalDescriptorAllocator.destroyPools(device);
         vkDestroyDescriptorSetLayout(device, drawImageDescriptorLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, singleImageDescriptorLayout, nullptr);
         vkDestroyDescriptorSetLayout(device, gpuSceneDataDescriptorLayout, nullptr);
@@ -422,6 +446,7 @@ void VulkanEngine::initDescriptors() {
 void VulkanEngine::initPipelines() {
     initBackgroundPipelines();
     initMeshPipeline();
+    metalRoughMaterial.buildPipelines(this);
 }
 
 void VulkanEngine::initBackgroundPipelines() {
@@ -488,7 +513,7 @@ void VulkanEngine::initBackgroundPipelines() {
 
     vkDestroyShaderModule(device, gradientShader, nullptr);
     vkDestroyShaderModule(device, skyShader, nullptr);
-    mainDeletionQueue.pushTask([=]() {
+    mainDeletionQueue.pushTask([=, *this]() {
         vkDestroyPipelineLayout(device, gradientPipelineLayout, nullptr);
         vkDestroyPipeline(device, gradient.pipeline, nullptr);
         vkDestroyPipeline(device, sky.pipeline, nullptr);
@@ -823,6 +848,8 @@ void VulkanEngine::cleanup() {
             destroyBuffer(mesh->meshBuffers.vertexBuffer);
         }
 
+        metalRoughMaterial.clearResources(device);
+
         mainDeletionQueue.flush();
 
         destroySwapchain();
@@ -996,4 +1023,104 @@ AllocatedImage VulkanEngine::createImage(void* data, VkExtent3D size, VkFormat f
 void VulkanEngine::destroyImage(const AllocatedImage& image) {
     vkDestroyImageView(device, image.imageView, nullptr);
     vmaDestroyImage(allocator, image.image, image.allocation);
+}
+
+void GLTFMetallic_Roughness::buildPipelines(VulkanEngine* engine) {
+    VkShaderModule meshFragShader;
+    if (!vkutil::loadShaderModule("../shaders/compiled/mesh.frag.spv", engine->device, &meshFragShader)) {
+        fmt::print("Error when building mesh fragment shader module");
+    }
+
+    VkShaderModule meshVertexShader;
+    if (!vkutil::loadShaderModule("../shaders/compiled/mesh.vert.spv", engine->device, &meshVertexShader)) {
+        fmt::print("Error when building mesh vertex shader module");
+    }
+
+    VkPushConstantRange matrixRange{};
+    matrixRange.offset     = 0;
+    matrixRange.size       = sizeof(GPUDrawPushConstants);
+    matrixRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+
+    DescriptorLayoutBuilder layoutBuilder;
+    layoutBuilder.addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    layoutBuilder.addBinding(1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    layoutBuilder.addBinding(2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+
+    materialLayout = layoutBuilder.build(engine->device, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                         nullptr, 0);
+
+    VkDescriptorSetLayout layouts[] = {engine->gpuSceneDataDescriptorLayout, materialLayout};
+
+    auto meshLayoutInfo                   = vkinit::createPipelineLayoutCreateInfo();
+    meshLayoutInfo.setLayoutCount         = 2;
+    meshLayoutInfo.pSetLayouts            = layouts;
+    meshLayoutInfo.pPushConstantRanges    = &matrixRange;
+    meshLayoutInfo.pushConstantRangeCount = 1;
+
+    VkPipelineLayout newLayout;
+    VK_CHECK(vkCreatePipelineLayout(engine->device, &meshLayoutInfo, nullptr, &newLayout));
+
+    opaquePipeline.layout      = newLayout;
+    transparentPipeline.layout = newLayout;
+
+    PipelineBuilder pipelineBuilder;
+    pipelineBuilder.setShaders(meshVertexShader, meshFragShader);
+    pipelineBuilder.setInputTopology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    pipelineBuilder.setPolygonMode(VK_POLYGON_MODE_FILL);
+    pipelineBuilder.setCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_CLOCKWISE);
+    pipelineBuilder.setMultisamplingNone();
+    pipelineBuilder.disableBlending();
+    // TODO example uses greater than because of other order on dtest - figure out how to make work
+    pipelineBuilder.enableDepthTest(true, VK_COMPARE_OP_LESS_OR_EQUAL);
+
+    pipelineBuilder.setColorAttachmentFormat(engine->drawImage.imageFormat);
+    pipelineBuilder.setDepthFormat(engine->depthImage.imageFormat);
+
+    pipelineBuilder.pipelineLayout = newLayout;
+
+    opaquePipeline.pipeline = pipelineBuilder.buildPipeline(engine->device);
+
+    // Make transparent variant
+    pipelineBuilder.enableBlendingAdditive();
+    pipelineBuilder.enableDepthTest(false, VK_COMPARE_OP_LESS_OR_EQUAL);
+
+    transparentPipeline.pipeline = pipelineBuilder.buildPipeline(engine->device);
+
+    vkDestroyShaderModule(engine->device, meshFragShader, nullptr);
+    vkDestroyShaderModule(engine->device, meshVertexShader, nullptr);
+}
+
+MaterialInstance GLTFMetallic_Roughness::writeMaterial(VkDevice device, MaterialPass pass,
+                                                       const MaterialResources& resources,
+                                                       DescriptorAllocatorGrowable& descriptorAllocator) {
+    MaterialInstance matData{};
+    matData.passType = pass;
+    if (pass == MaterialPass::Transparent) {
+        matData.pipeline = &transparentPipeline;
+    } else {
+        matData.pipeline = &opaquePipeline;
+    }
+
+    matData.materialSet = descriptorAllocator.allocate(device, materialLayout, nullptr);
+
+    writer.clear();
+    writer.writeBuffer(0, resources.dataBuffer, sizeof(MaterialConstants), resources.dataBufferOffset,
+                       VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
+    writer.writeImage(1, resources.colorImage.imageView, resources.colorSampler,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+    writer.writeImage(2, resources.metalRoughImage.imageView, resources.metalRoughSampler,
+                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+
+    writer.updateSet(device, matData.materialSet);
+
+    return matData;
+}
+
+void GLTFMetallic_Roughness::clearResources(VkDevice device) const {
+    vkDestroyDescriptorSetLayout(device, materialLayout, nullptr);
+    vkDestroyPipelineLayout(device, transparentPipeline.layout, nullptr);
+
+
+    vkDestroyPipeline(device, transparentPipeline.pipeline, nullptr);
+    vkDestroyPipeline(device, opaquePipeline.pipeline, nullptr);
 }

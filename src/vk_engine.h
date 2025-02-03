@@ -63,6 +63,38 @@ struct GPUSceneData {
     glm::mat4 sunlightColor;
 };
 
+struct GLTFMetallic_Roughness {
+    MaterialPipeline opaquePipeline;
+    MaterialPipeline transparentPipeline;
+
+    VkDescriptorSetLayout materialLayout;
+
+    struct MaterialConstants {
+        glm::vec4 colorFactors;
+        glm::vec4 metal_rough_factors;
+        // Padding that is needed for uniform buffers TODO research
+        // Binding a uniform buffer requires a min requirement for alignment. 256 bytes is a good default.
+        glm::vec4 extra[14];
+    };
+
+    struct MaterialResources {
+        AllocatedImage colorImage;
+        VkSampler colorSampler;
+        AllocatedImage metalRoughImage;
+        VkSampler metalRoughSampler;
+        VkBuffer dataBuffer;
+        uint32_t dataBufferOffset;
+    };
+
+    DescriptorWriter writer;
+
+    void buildPipelines(VulkanEngine* engine);
+    void clearResources(VkDevice device) const;
+
+    MaterialInstance writeMaterial(VkDevice device, MaterialPass pass, const MaterialResources& resources,
+                                   DescriptorAllocatorGrowable& descriptorAllocator);
+};
+
 constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
 
 class VulkanEngine {
@@ -103,7 +135,7 @@ public:
     VkQueue graphicsQueue{};
     uint32_t graphicsQueueFamily{0};
 
-    DescriptorAllocator globalDescriptorAllocator{nullptr};
+    DescriptorAllocatorGrowable globalDescriptorAllocator;
     VkDescriptorSet drawImageDescriptors{nullptr};
     VkDescriptorSetLayout drawImageDescriptorLayout{nullptr};
 
@@ -134,6 +166,9 @@ public:
     VkSampler defaultSamplerNearest;
 
     VkDescriptorSetLayout singleImageDescriptorLayout;
+
+    MaterialInstance defaultData;
+    GLTFMetallic_Roughness metalRoughMaterial;
 
     static VulkanEngine& Get();
 
