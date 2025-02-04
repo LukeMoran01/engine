@@ -81,3 +81,31 @@ struct MaterialInstance {
     VkDescriptorSet materialSet;
     MaterialPass passType;
 };
+
+struct DrawContext;
+
+// This is an interface in c++, wowee
+class IRenderable {
+    virtual void Draw(const glm::mat4& topMatrix, DrawContext& ctx) = 0;
+};
+
+struct Node : IRenderable {
+    std::weak_ptr<Node> parent;
+    std::vector<std::shared_ptr<Node>> children;
+
+    glm::mat4 localTransform;
+    glm::mat4 worldTransform;
+
+    void refreshTransform(const glm::mat4& parentMatrix) {
+        worldTransform = parentMatrix * localTransform;
+        for (const auto& child : children) {
+            child->refreshTransform(worldTransform);
+        }
+    }
+
+    virtual void Draw(const glm::mat4& topMatrix, DrawContext& ctx) {
+        for (auto& child : children) {
+            child->Draw(topMatrix, ctx);
+        }
+    }
+};
