@@ -57,10 +57,10 @@ struct ComputeEffect {
 struct GPUSceneData {
     glm::mat4 view;
     glm::mat4 proj;
-    glm::mat4 viewProj;
-    glm::mat4 ambientColor;
-    glm::mat4 sunlightDirection;
-    glm::mat4 sunlightColor;
+    glm::mat4 viewproj;
+    glm::vec4 ambientColor;
+    glm::vec4 sunlightDirection;
+    glm::vec4 sunlightColor;
 };
 
 struct GLTFMetallic_Roughness {
@@ -93,6 +93,28 @@ struct GLTFMetallic_Roughness {
 
     MaterialInstance writeMaterial(VkDevice device, MaterialPass pass, const MaterialResources& resources,
                                    DescriptorAllocatorGrowable& descriptorAllocator);
+};
+
+// The core of our rendering. Renderer will take the array of objects from the context and execute a single draw for each
+struct RenderObject {
+    uint32_t indexCount;
+    uint32_t firstIndex;
+    VkBuffer indexBuffer;
+
+    MaterialInstance* material;
+
+    glm::mat4 transform;
+    VkDeviceAddress vertexBufferAddress;
+};
+
+struct DrawContext {
+    std::vector<RenderObject> OpaqueSurfaces;
+};
+
+struct MeshNode : Node {
+    std::shared_ptr<MeshAsset> mesh;
+
+    void Draw(const glm::mat4& topMatrix, DrawContext& ctx) override;
 };
 
 constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
@@ -170,6 +192,9 @@ public:
     MaterialInstance defaultData;
     GLTFMetallic_Roughness metalRoughMaterial;
 
+    DrawContext mainDrawContext;
+    std::unordered_map<std::string, std::shared_ptr<Node>> loadedNodes;;
+
     static VulkanEngine& Get();
 
     //initializes everything in the engine
@@ -189,6 +214,8 @@ public:
     void immediateSubmit(std::function<void(VkCommandBuffer cmdBuffer)>&& function);
 
     GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
+
+    void updateScene();
 
 private:
     void initVulkan();
