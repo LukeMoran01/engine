@@ -140,6 +140,20 @@ void VulkanEngine::initDefaultData() {
 
     defaultData = metalRoughMaterial.writeMaterial(device, MaterialPass::MainColor, materialResources,
                                                    globalDescriptorAllocator);
+
+    for (auto& m : testMeshes) {
+        std::shared_ptr<MeshNode> newNode = std::make_shared<MeshNode>();
+        newNode->mesh                     = m;
+
+        newNode->localTransform = glm::mat4(1.f);
+        newNode->worldTransform = glm::mat4(1.f);
+
+        for (auto& s : newNode->mesh->surfaces) {
+            s.material = std::make_shared<GLTFMaterial>(defaultData);
+        }
+
+        loadedNodes[m->name] = std::move(newNode);
+    }
 }
 
 
@@ -522,6 +536,8 @@ void VulkanEngine::initBackgroundPipelines() {
 
 // https://registry.khronos.org/vulkan/specs/1.3-extensions/html/chap12.html#resources-image-layouts
 void VulkanEngine::draw() {
+    updateScene();
+
     VK_CHECK(vkWaitForFences(device, 1, &getCurrentFrame().renderFence, VK_TRUE, 1000000000));
     getCurrentFrame().deletionQueue.flush();
     getCurrentFrame().frameDescriptors.clearPools(device);
@@ -670,42 +686,24 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
 
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipeline);
+    // Binding every draw is inefficient but later to be fixed
+    for (const RenderObject& draw : mainDrawContext.OpaqueSurfaces) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->pipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->layout, 0, 1,
+                                &globalDescriptor, 0, nullptr);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->layout, 1, 1,
+                                &draw.material->materialSet, 0, nullptr);
 
-    VkDescriptorSet imageSet = getCurrentFrame().frameDescriptors.
-                                                 allocate(device, singleImageDescriptorLayout, nullptr);
-    {
-        DescriptorWriter writer;
-        writer.writeImage(0, errorCheckerboardImage.imageView, defaultSamplerNearest,
-                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
-        writer.updateSet(device, imageSet);
+        vkCmdBindIndexBuffer(commandBuffer, draw.indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+        GPUDrawPushConstants pushConstants{};
+        pushConstants.vertexBuffer = draw.vertexBufferAddress;
+        pushConstants.worldMatrix  = draw.transform;
+        vkCmdPushConstants(commandBuffer, draw.material->pipeline->layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           sizeof(GPUDrawPushConstants), &pushConstants);
+
+        vkCmdDrawIndexed(commandBuffer, draw.indexCount, 1, draw.firstIndex, 0, 0);
     }
-
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, meshPipelineLayout, 0, 1, &imageSet, 0,
-                            nullptr);
-
-    glm::mat4 view = glm::translate(glm::vec3{ViewTranslateX, ViewTranslateY, ViewTranslateZ});
-
-    // Reversing the depth so that 0 is the far plane apparently greatly improves the quality of depth testing.. ?
-    // TODO: Research how/why
-    // For now, we are using a standard depth near/far
-    glm::mat4 projection = glm::perspective(glm::radians(70.0f),
-                                            static_cast<float>(drawExtent.width) / static_cast<float>(drawExtent.
-                                                height), 0.1f, 1000.0f);
-
-    projection[1][1] *= -1;
-
-    GPUDrawPushConstants pushConstants{};
-    pushConstants.worldMatrix  = projection * view;
-    pushConstants.vertexBuffer = testMeshes[2]->meshBuffers.vertexBufferAddress;
-
-    vkCmdPushConstants(commandBuffer, meshPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                       sizeof(GPUDrawPushConstants),
-                       &pushConstants);
-    vkCmdBindIndexBuffer(commandBuffer, testMeshes[2]->meshBuffers.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-
-    vkCmdDrawIndexed(commandBuffer, testMeshes[2]->surfaces[0].count, 1, testMeshes[2]->surfaces[0].startIndex, 0,
-                     0);
 
     vkCmdEndRendering(commandBuffer);
 }
@@ -1025,6 +1023,34 @@ void VulkanEngine::destroyImage(const AllocatedImage& image) {
     vmaDestroyImage(allocator, image.image, image.allocation);
 }
 
+
+void VulkanEngine::updateScene() {
+    mainDrawContext.OpaqueSurfaces.clear();
+
+    loadedNodes["Suzanne"]->Draw(glm::mat4{1.f}, mainDrawContext);
+
+    sceneData.view = glm::translate(glm::vec3{0, 0, -5});
+    // TODO change to near plane is far
+    sceneData.proj = glm::perspective(glm::radians(70.f),
+                                      static_cast<float>(windowExtent.width) / static_cast<float>(windowExtent.height),
+                                      0.1f, 10000.f);
+
+    // Invert y on proj mat so we are similar to opengl and gltf axis
+    sceneData.proj[1][1] *= -1;
+    sceneData.viewproj = sceneData.proj * sceneData.view;
+
+    sceneData.ambientColor      = glm::vec4(.1f);
+    sceneData.sunlightColor     = glm::vec4(1.f);
+    sceneData.sunlightDirection = glm::vec4(0, 1, 0.5, 1.f);
+
+    for (int x = -3; x < 3; x++) {
+        glm::mat4 scale       = glm::scale(glm::vec3{0.2});
+        glm::mat4 translation = glm::translate(glm::vec3{x, 1, 0});
+
+        loadedNodes["Cube"]->Draw(translation * scale, mainDrawContext);
+    }
+}
+
 void GLTFMetallic_Roughness::buildPipelines(VulkanEngine* engine) {
     VkShaderModule meshFragShader;
     if (!vkutil::loadShaderModule("../shaders/compiled/mesh.frag.spv", engine->device, &meshFragShader)) {
@@ -1124,3 +1150,23 @@ void GLTFMetallic_Roughness::clearResources(VkDevice device) const {
     vkDestroyPipeline(device, transparentPipeline.pipeline, nullptr);
     vkDestroyPipeline(device, opaquePipeline.pipeline, nullptr);
 }
+
+void MeshNode::Draw(const glm::mat4& topMatrix, DrawContext& ctx) {
+    glm::mat4 nodeMatrix = topMatrix * worldTransform;
+
+    for (auto& s : mesh->surfaces) {
+        RenderObject def{};
+        def.indexCount  = s.count;
+        def.firstIndex  = s.startIndex;
+        def.indexBuffer = mesh->meshBuffers.indexBuffer.buffer;
+        def.material    = &s.material->data;
+
+        def.transform           = nodeMatrix;
+        def.vertexBufferAddress = mesh->meshBuffers.vertexBufferAddress;
+
+        ctx.OpaqueSurfaces.push_back(def);
+    }
+
+    Node::Draw(topMatrix, ctx);
+}
+
