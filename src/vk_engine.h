@@ -11,6 +11,8 @@
 #include "vk_descriptors.h"
 #include "vk_loader.h"
 
+#include <camera.h>
+
 // TODO: Inefficient but general to use lambdas, could use arrays of specific vulkan handles
 struct DeletionQueue {
     std::deque<std::function<void()>> deletionTasks;
@@ -128,7 +130,9 @@ public:
     VkExtent2D windowExtent{1700, 900};
     float renderScale{1.0f};
 
-    struct SDL_Window* window{nullptr};
+    SDL_Window* window{nullptr};
+
+    Camera mainCamera;
 
     DeletionQueue mainDeletionQueue;
 

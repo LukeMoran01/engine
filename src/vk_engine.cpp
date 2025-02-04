@@ -69,6 +69,11 @@ void VulkanEngine::init() {
 
     initImgui();
 
+    mainCamera.velocity = glm::vec3(0, 0, 0.5f);
+    mainCamera.position = glm::vec3(0, 0, 5);
+    mainCamera.pitch    = 0.0f;
+    mainCamera.yaw      = 0.0f;
+
     // everything went fine
     isInitialized = true;
 }
@@ -718,16 +723,20 @@ void VulkanEngine::run() {
         while (SDL_PollEvent(&event) != 0) {
             // ReSharper disable once CppDefaultCaseNotHandledInSwitchStatement
             switch (event.type) {
-                case SDL_EVENT_QUIT: running = false;
+                case SDL_EVENT_QUIT: {
+                    running = false;
                     break;
+                }
                 case SDL_EVENT_WINDOW_MINIMIZED: {
                     stopRendering = true;
                     break;
-                case SDL_EVENT_WINDOW_RESTORED: stopRendering = false;
+                }
+                case SDL_EVENT_WINDOW_RESTORED: {
+                    stopRendering = false;
                     break;
                 }
             }
-
+            mainCamera.processSDLEvent(event);
             ImGui_ImplSDL3_ProcessEvent(&event);
         }
 
@@ -1029,14 +1038,20 @@ void VulkanEngine::updateScene() {
 
     loadedNodes["Suzanne"]->Draw(glm::mat4{1.f}, mainDrawContext);
 
-    sceneData.view = glm::translate(glm::vec3{0, 0, -5});
+    mainCamera.update();
+
+    glm::mat4 view = mainCamera.getViewMatrix();
     // TODO change to near plane is far
-    sceneData.proj = glm::perspective(glm::radians(70.f),
-                                      static_cast<float>(windowExtent.width) / static_cast<float>(windowExtent.height),
-                                      0.1f, 10000.f);
+    glm::mat4 projection = glm::perspective(glm::radians(70.f),
+                                            static_cast<float>(windowExtent.width) / static_cast<float>(windowExtent.
+                                                height),
+                                            0.1f, 10000.f);
 
     // Invert y on proj mat so we are similar to opengl and gltf axis
-    sceneData.proj[1][1] *= -1;
+    projection[1][1] *= -1;
+
+    sceneData.view     = view;
+    sceneData.proj     = projection;
     sceneData.viewproj = sceneData.proj * sceneData.view;
 
     sceneData.ambientColor      = glm::vec4(.1f);

@@ -36,6 +36,8 @@ add_executable(${PROJECT_NAME}
         src/vk_pipelines.h
         src/vk_loader.cpp
         src/vk_loader.h
+        src/camera.h
+        src/camera.cpp
         # Add other source files here
 )
 add_subdirectory(external/fmt)
