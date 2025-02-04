@@ -11,3 +11,7 @@ A C++ and Graphics learning project
 ### Commit 69: 48ce7a1107a8b3a2b8678e1b74615d57f89e644d
 
 ![img.png](screenshots/blend_test.png)
+
+## Commit 84: 7150e17d2d7084f8e92b4b08748afeb8e6c36ba8
+
+![img.png](screenshots/basic-lighting.png)
