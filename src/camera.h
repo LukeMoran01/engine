@@ -17,6 +17,7 @@ class Camera {
 public:
     glm::vec3 velocity;
     glm::vec3 position;
+    float speed;
 
     // Vertical/Horizontal
     float pitch{0.f};

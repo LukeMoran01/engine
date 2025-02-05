@@ -10,7 +10,7 @@
 void Camera::update() {
     // Converts relative movement (forward in camera space) to world space
     glm::mat4 cameraRotation = getRotationMatrix();
-    position += glm::vec3(cameraRotation * glm::vec4(velocity * 0.5f, 0.f));
+    position += glm::vec3(cameraRotation * glm::vec4(speed * velocity * 0.5f, 0.f));
 }
 
 // TODO currently doesnt take delta time into account which it should - our speed changes based on frame rate now
