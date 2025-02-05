@@ -7,6 +7,8 @@
 #include <vk_types.h>
 #include <filesystem>
 
+#include "vk_descriptors.h"
+
 class VulkanEngine;
 
 struct GLTFMaterial {
@@ -26,6 +28,37 @@ struct MeshAsset {
     GPUMeshBuffers meshBuffers;
 };
 
+struct LoadedGLTF : IRenderable {
+    std::unordered_map<std::string, std::shared_ptr<MeshAsset>> meshes;
+    std::unordered_map<std::string, std::shared_ptr<Node>> nodes;
+    std::unordered_map<std::string, AllocatedImage> images;
+    std::unordered_map<std::string, std::shared_ptr<GLTFMaterial>> materials;
+
+    // Nodes without a parents
+    std::vector<std::shared_ptr<Node>> topNodes;
+
+    // TODO likely few of these and could maybe be stored globally but data separation for now
+    std::vector<VkSampler> samplers;
+
+    DescriptorAllocatorGrowable descriptorPool;
+
+    AllocatedBuffer materialDataBuffer;
+
+    // Could be singleton
+    VulkanEngine* creator;
+
+    ~LoadedGLTF() { clearAll(); };
+
+    void Draw(const glm::mat4& topMatrix, DrawContext& ctx) override;
+
+private:
+    void clearAll();
+};
+
 
 std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngine* engine,
                                                                       const std::filesystem::path& filePath);
+
+std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanEngine* engine, std::string_view filePath);
+
+
