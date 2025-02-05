@@ -111,6 +111,7 @@ struct RenderObject {
 
 struct DrawContext {
     std::vector<RenderObject> OpaqueSurfaces;
+    std::vector<RenderObject> TransparentSurfaces;
 };
 
 struct MeshNode : Node {
@@ -198,6 +199,7 @@ public:
 
     DrawContext mainDrawContext;
     std::unordered_map<std::string, std::shared_ptr<Node>> loadedNodes;;
+    std::unordered_map<std::string, std::shared_ptr<LoadedGLTF>> loadedScenes;
 
     static VulkanEngine& Get();
 
@@ -220,6 +222,13 @@ public:
     GPUMeshBuffers uploadMesh(std::span<uint32_t> indices, std::span<Vertex> vertices);
 
     void updateScene();
+
+    AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
+    void destroyBuffer(AllocatedBuffer buffer);
+
+    AllocatedImage createImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped);
+    AllocatedImage createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped);
+    void destroyImage(const AllocatedImage& image);
 
 private:
     void initVulkan();
@@ -245,11 +254,4 @@ private:
     void drawImgui(VkCommandBuffer commandBuffer, VkImageView targetImageView);
 
     void initMeshPipeline();
-
-    AllocatedBuffer createBuffer(size_t allocSize, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
-    void destroyBuffer(AllocatedBuffer buffer);
-
-    AllocatedImage createImage(VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped);
-    AllocatedImage createImage(void* data, VkExtent3D size, VkFormat format, VkImageUsageFlags usage, bool mipmapped);
-    void destroyImage(const AllocatedImage& image);
 };
