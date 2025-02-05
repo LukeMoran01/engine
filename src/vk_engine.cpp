@@ -50,7 +50,8 @@ void VulkanEngine::init() {
     SDL_SetAppMetadata("Engine", "0.1.0", nullptr);
     // Hints are configuration variables, there are many more https://wiki.libsdl.org/SDL3/CategoryHints
     SDL_SetHint(SDL_HINT_EVENT_LOGGING, "1");
-    auto windowFlags = SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE;
+    auto windowFlags = SDL_WINDOW_INPUT_FOCUS | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
+        SDL_WINDOW_MOUSE_RELATIVE_MODE | SDL_WINDOW_MOUSE_GRABBED | SDL_WINDOW_MOUSE_FOCUS;
     window = SDL_CreateWindow("Engine", static_cast<int>(windowExtent.width), static_cast<int>(windowExtent.height),
                               windowFlags);
 
@@ -726,6 +727,7 @@ void VulkanEngine::run() {
     bool running = true;
 
     // main loop
+
     while (running) {
         // Handle events on queue
         while (SDL_PollEvent(&event) != 0) {
@@ -743,8 +745,24 @@ void VulkanEngine::run() {
                     stopRendering = false;
                     break;
                 }
+                case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+                    if (event.button.button == SDL_BUTTON_RIGHT) {
+                        SDL_SetWindowRelativeMouseMode(window, true);
+                        SDL_SetWindowMouseGrab(window, true);
+                    }
+                    break;
+                }
+                case SDL_EVENT_MOUSE_BUTTON_UP: {
+                    if (event.button.button == SDL_BUTTON_RIGHT) {
+                        SDL_SetWindowRelativeMouseMode(window, false);
+                        SDL_SetWindowMouseGrab(window, false);
+                    }
+                    break;
+                }
             }
-            mainCamera.processSDLEvent(event);
+            if (SDL_GetWindowRelativeMouseMode(window)) {
+                mainCamera.processSDLEvent(event);
+            }
             ImGui_ImplSDL3_ProcessEvent(&event);
         }
 
