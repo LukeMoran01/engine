@@ -33,10 +33,6 @@
 constexpr bool useValidationLayers    = true;
 constexpr std::array validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
-float ViewTranslateX = 0.0f;
-float ViewTranslateY = 0.0f;
-float ViewTranslateZ = -5.0f;
-
 VulkanEngine* loadedEngine = nullptr;
 
 VulkanEngine& VulkanEngine::Get() { return *loadedEngine; }
@@ -69,10 +65,16 @@ void VulkanEngine::init() {
 
     initImgui();
 
-    mainCamera.velocity = glm::vec3(0, 0, 0.5f);
-    mainCamera.position = glm::vec3(0, 0, 5);
+    mainCamera.velocity = glm::vec3(0, 0, 0);
+    mainCamera.speed    = 0.2;
+    mainCamera.position = glm::vec3(30.f, -00.f, -085.f);
     mainCamera.pitch    = 0.0f;
     mainCamera.yaw      = 0.0f;
+
+    std::string structurePath = {"..\\assets\\structure.glb"};
+    auto structureFile        = loadGltf(this, structurePath);
+    assert(structureFile.has_value());
+    loadedScenes["structure"] = *structureFile;
 
     // everything went fine
     isInitialized = true;
@@ -692,7 +694,7 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
     // Binding every draw is inefficient but later to be fixed
-    for (const RenderObject& draw : mainDrawContext.OpaqueSurfaces) {
+    auto draw = [&](const RenderObject& draw) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->pipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, draw.material->pipeline->layout, 0, 1,
                                 &globalDescriptor, 0, nullptr);
@@ -708,9 +710,15 @@ void VulkanEngine::drawGeometry(VkCommandBuffer commandBuffer) {
                            sizeof(GPUDrawPushConstants), &pushConstants);
 
         vkCmdDrawIndexed(commandBuffer, draw.indexCount, 1, draw.firstIndex, 0, 0);
-    }
+    };
+
+    for (auto& r : mainDrawContext.OpaqueSurfaces) draw(r);
+    for (auto& r : mainDrawContext.TransparentSurfaces) draw(r);
 
     vkCmdEndRendering(commandBuffer);
+
+    mainDrawContext.OpaqueSurfaces.clear();
+    mainDrawContext.TransparentSurfaces.clear();
 }
 
 void VulkanEngine::run() {
@@ -772,13 +780,6 @@ void VulkanEngine::run() {
 
         ImGui::End();
 
-        if (ImGui::Begin("monke")) {
-            ImGui::SliderFloat("X", &ViewTranslateX, -10, 10);
-            ImGui::SliderFloat("Y", &ViewTranslateY, -10, 10);
-            ImGui::SliderFloat("Z", &ViewTranslateZ, -10, 10);
-        }
-
-        ImGui::End();
         ImGui::Render();
 
         draw();
@@ -839,6 +840,8 @@ void VulkanEngine::initMeshPipeline() {
 void VulkanEngine::cleanup() {
     if (isInitialized) {
         vkDeviceWaitIdle(device);
+
+        loadedScenes.clear();
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
             vkDestroyCommandPool(device, frames[i].commandPool, nullptr);
@@ -1034,9 +1037,8 @@ void VulkanEngine::destroyImage(const AllocatedImage& image) {
 
 
 void VulkanEngine::updateScene() {
-    mainDrawContext.OpaqueSurfaces.clear();
-
     loadedNodes["Suzanne"]->Draw(glm::mat4{1.f}, mainDrawContext);
+    loadedScenes["structure"]->Draw(glm::mat4{1.f}, mainDrawContext);
 
     mainCamera.update();
 
