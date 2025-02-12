@@ -120,10 +120,20 @@ struct MeshNode : Node {
     void Draw(const glm::mat4& topMatrix, DrawContext& ctx) override;
 };
 
+struct EngineStats {
+    float frameTime;
+    int triangleCount;
+    int drawcallCount;
+    float sceneUpdateTime;
+    float meshDrawTime;
+};
+
 constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
 
 class VulkanEngine {
 public:
+    EngineStats stats;
+
     bool isInitialized{false};
     int frameNumber{0};
     bool stopRendering{false};
