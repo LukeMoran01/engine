@@ -7,6 +7,10 @@
 
 class InputHandler {
 public:
+    explicit InputHandler(WindowEventQueue* weq) {
+        windowEventQueue = weq;
+    };
+
     WindowEventQueue* windowEventQueue;
     // EventQueue* userEventQueue;
     void update();

@@ -17,8 +17,6 @@
 #include <fastgltf/tools.hpp>
 #include <fastgltf/core.hpp>
 
-#include "fmt/printf.h"
-
 #include "vk_images.h"
 
 // fastgltf samplers use openGL properties so we need to convert them
@@ -30,7 +28,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanRend
                                                                       const std::filesystem::path& filePath) {
     auto expData = fastgltf::GltfDataBuffer::FromPath(filePath);
     if (!expData) {
-        fmt::printf("Failed to load gltf file: {} \n", to_underlying(expData.error()));
+        spdlog::error("Failed to load gltf file: {} \n", to_underlying(expData.error()));
         return {};
     }
     auto data = std::move(expData.get());
@@ -42,7 +40,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanRend
 
     auto load = parser.loadGltfBinary(data, filePath.parent_path(), gltfOptions);
     if (!load) {
-        fmt::print("Failed to load gltf: {} \n", to_underlying(load.error()));
+        spdlog::error("Failed to load gltf: {} \n", to_underlying(load.error()));
         return {};
     }
     gltf = std::move(load.get());
@@ -129,8 +127,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanRend
 }
 
 std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanRenderer* engine, std::string_view filePath) {
-    fmt::print("Loading GLTF: {}", filePath);
-
+    spdlog::info("Loading GLTF: {}", filePath);
     std::shared_ptr<LoadedGLTF> scene = std::make_shared<LoadedGLTF>();
     scene->creator                    = engine;
     LoadedGLTF& file                  = *scene;
@@ -142,7 +139,7 @@ std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanRenderer* engine, std:
 
     auto expData = fastgltf::GltfDataBuffer::FromPath(filePath);
     if (!expData) {
-        fmt::printf("Failed to load gltf file: {} \n", to_underlying(expData.error()));
+        spdlog::error("Failed to load gltf file: {} \n", to_underlying(expData.error()));
         return {};
     }
     auto data = std::move(expData.get());
@@ -153,7 +150,7 @@ std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanRenderer* engine, std:
 
     auto expLoad = parser.loadGltf(data, path.parent_path(), gltfOptions);
     if (!expLoad) {
-        fmt::printf("Failed to parse gltf file: {} \n", to_underlying(expData.error()));
+        spdlog::error("Failed to parse gltf file: {} \n", to_underlying(expData.error()));
         return {};
     }
     gltf = std::move(expLoad.get());

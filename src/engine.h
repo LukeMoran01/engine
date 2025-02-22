@@ -11,7 +11,7 @@ class Engine {
 public:
     bool isRunning;
 
-    InputHandler input;
+    InputHandler* input;
     Game* game;
     VulkanRenderer* renderer;
 

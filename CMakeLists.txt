@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(EXT_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/external/include")
 set(imgui_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/imgui")
 set(fastgltf_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/external/fastgltf/include")
+set(spdlog_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog/include")
 
 # SDL3 path configuration
 if (WIN32)
@@ -46,9 +47,9 @@ add_executable(${PROJECT_NAME}
         src/event_queue.h
         # Add other source files here
 )
-add_subdirectory(external/fmt)
 add_subdirectory(external/vk-bootstrap)
 add_subdirectory(external/JoltPhysics/Build)
+add_subdirectory(external/spdlog)
 
 if (WIN32)
     # Add SDL3.dll to output directory
@@ -82,11 +83,9 @@ target_include_directories(imgui_lib PUBLIC
 target_link_libraries(imgui_lib PUBLIC
         Vulkan::Vulkan
         ${SDL3_LIBRARY}
-        Jolt
 )
 
-# Link SDL3
-target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Vulkan::Vulkan fmt::fmt vk-bootstrap::vk-bootstrap
+target_link_libraries(${PROJECT_NAME} PRIVATE ${SDL3_LIBRARY} Jolt Vulkan::Vulkan spdlog vk-bootstrap::vk-bootstrap
         imgui_lib fastgltf::fastgltf)
 
 # Include directories
@@ -98,5 +97,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE
         ${GLM_INCLUDE_DIR}
         ${imgui_SOURCE_DIR}
         ${imgui_SOURCE_DIR}/backends
+        ${spdlog_INCLUDES}
         "src"
 )

@@ -6,9 +6,30 @@
 #include <optional>
 #include <queue>
 
+#include "spdlog/spdlog.h"
+
+// TODO Basic but will do the job for now
+
 enum WindowEvent {
     MINIMIZE,
     RESTORE
+};
+
+template <>
+struct fmt::formatter<WindowEvent> {
+    constexpr auto parse(fmt::format_parse_context& ctx) { return ctx.begin(); }
+
+    template <typename FormatContext>
+    auto format(WindowEvent event, FormatContext& ctx) const {
+        const char* name = "unknown";
+        switch (event) {
+            case MINIMIZE: name = "WindowEvent::Minimize";
+                break;
+            case RESTORE: name = "WindowEvent::Restore";
+                break;
+        }
+        return fmt::format_to(ctx.out(), "{}", name);
+    }
 };
 
 class WindowEventQueue {

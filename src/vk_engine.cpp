@@ -805,99 +805,68 @@ void VulkanRenderer::drawGeometry(VkCommandBuffer commandBuffer) {
 }
 
 void VulkanRenderer::run() {
-    SDL_Event event;
-    bool running = true;
-
-    // main loop
-
-    while (running) {
-        auto start = std::chrono::system_clock::now();
-        // Handle events on queue
-        while (SDL_PollEvent(&event) != 0) {
-            // ReSharper disable once CppDefaultCaseNotHandledInSwitchStatement
-            switch (event.type) {
-                case SDL_EVENT_QUIT: {
-                    running = false;
-                    break;
-                }
-                case SDL_EVENT_WINDOW_MINIMIZED: {
-                    stopRendering = true;
-                    break;
-                }
-                case SDL_EVENT_WINDOW_RESTORED: {
-                    stopRendering = false;
-                    break;
-                }
-                case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-                    if (event.button.button == SDL_BUTTON_RIGHT) {
-                        SDL_SetWindowRelativeMouseMode(window, true);
-                        SDL_SetWindowMouseGrab(window, true);
-                    }
-                    break;
-                }
-                case SDL_EVENT_MOUSE_BUTTON_UP: {
-                    if (event.button.button == SDL_BUTTON_RIGHT) {
-                        SDL_SetWindowRelativeMouseMode(window, false);
-                        SDL_SetWindowMouseGrab(window, false);
-                    }
-                    break;
-                }
+    auto start = std::chrono::system_clock::now();
+    auto event = windowEventQueue->pollEvent();
+    if (event.has_value()) {
+        switch (event.value()) {
+            // TODO is minimize a renderer only behaviour change because of online play?
+            case MINIMIZE: {
+                stopRendering = true;
+                break;
             }
-            if (SDL_GetWindowRelativeMouseMode(window)) {
-                mainCamera.processSDLEvent(event);
+            case RESTORE: {
+                stopRendering = false;
+                break;
             }
-            ImGui_ImplSDL3_ProcessEvent(&event);
         }
-
-        // do not draw if we are minimized
-        if (stopRendering) {
-            // throttle the speed to avoid the endless spinning
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-
-        if (resizeRequested) {
-            resizeSwapchain();
-        }
-
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
-
-        if (ImGui::Begin("background")) {
-            ImGui::SliderFloat("Render Scale", &renderScale, 0.1f, 1.0f);
-            ComputeEffect& selected = backgroundEffects[currentBackgroundEffect];
-
-            ImGui::Text("Selected effect: ", selected.name);
-
-            ImGui::SliderInt("Effect Index", &currentBackgroundEffect, 0,
-                             static_cast<int>(backgroundEffects.size() - 1));
-
-            ImGui::InputFloat4("data1", reinterpret_cast<float*>(&selected.data.data1));
-            ImGui::InputFloat4("data2", reinterpret_cast<float*>(&selected.data.data2));
-            ImGui::InputFloat4("data3", reinterpret_cast<float*>(&selected.data.data3));
-            ImGui::InputFloat4("data4", reinterpret_cast<float*>(&selected.data.data4));
-        }
-        ImGui::End();
-
-        ImGui::Begin("Stats");
-
-        ImGui::Text("frametime %f ms", stats.frameTime);
-        ImGui::Text("draw time %f ms", stats.meshDrawTime);
-        ImGui::Text("update time %f ms", stats.sceneUpdateTime);
-        ImGui::Text("triangles %i", stats.triangleCount);
-        ImGui::Text("draws %i", stats.drawcallCount);
-        ImGui::End();
-
-        ImGui::Render();
-
-        draw();
-
-        auto end = std::chrono::system_clock::now();
-
-        auto elapsed    = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        stats.frameTime = elapsed.count() / 1000.0f;;
     }
+
+    // do not draw if we are minimized
+    if (stopRendering) {
+        return;
+    }
+
+    if (resizeRequested) {
+        resizeSwapchain();
+    }
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+    ImGui::NewFrame();
+
+    if (ImGui::Begin("background")) {
+        ImGui::SliderFloat("Render Scale", &renderScale, 0.1f, 1.0f);
+        ComputeEffect& selected = backgroundEffects[currentBackgroundEffect];
+
+        ImGui::Text("Selected effect: ", selected.name);
+
+        ImGui::SliderInt("Effect Index", &currentBackgroundEffect, 0,
+                         static_cast<int>(backgroundEffects.size() - 1));
+
+        ImGui::InputFloat4("data1", reinterpret_cast<float*>(&selected.data.data1));
+        ImGui::InputFloat4("data2", reinterpret_cast<float*>(&selected.data.data2));
+        ImGui::InputFloat4("data3", reinterpret_cast<float*>(&selected.data.data3));
+        ImGui::InputFloat4("data4", reinterpret_cast<float*>(&selected.data.data4));
+    }
+    ImGui::End();
+
+    ImGui::Begin("Stats");
+
+    ImGui::Text("frametime %f ms", stats.frameTime);
+    ImGui::Text("draw time %f ms", stats.meshDrawTime);
+    ImGui::Text("update time %f ms", stats.sceneUpdateTime);
+    ImGui::Text("triangles %i", stats.triangleCount);
+    ImGui::Text("draws %i", stats.drawcallCount);
+    ImGui::End();
+
+    ImGui::Render();
+
+    draw();
+
+    auto end = std::chrono::system_clock::now();
+
+    auto elapsed    = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    stats.frameTime = elapsed.count() / 1000.0f;;
 }
 
 void VulkanRenderer::initMeshPipeline() {

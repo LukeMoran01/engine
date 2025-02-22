@@ -13,6 +13,8 @@
 
 #include <camera.h>
 
+#include "event_queue.h"
+
 // TODO: Inefficient but general to use lambdas, could use arrays of specific vulkan handles
 struct DeletionQueue {
     std::deque<std::function<void()>> deletionTasks;
@@ -136,7 +138,11 @@ constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
 
 class VulkanRenderer {
 public:
-    EngineStats stats;
+    VulkanRenderer(WindowEventQueue* weq) {
+        windowEventQueue = weq;
+    }
+
+    EngineStats stats{};
 
     bool isInitialized{false};
     int frameNumber{0};
@@ -186,29 +192,29 @@ public:
     std::vector<ComputeEffect> backgroundEffects{};
     int currentBackgroundEffect{0};
 
-    VkPipelineLayout meshPipelineLayout;
-    VkPipeline meshPipeline;
+    VkPipelineLayout meshPipelineLayout{};
+    VkPipeline meshPipeline{};
 
-    VkFence immFence;
-    VkCommandBuffer immCommandBuffer;
-    VkCommandPool immCommandPool;
+    VkFence immFence{};
+    VkCommandBuffer immCommandBuffer{};
+    VkCommandPool immCommandPool{};
 
-    GPUSceneData sceneData;
-    VkDescriptorSetLayout gpuSceneDataDescriptorLayout;
+    GPUSceneData sceneData{};
+    VkDescriptorSetLayout gpuSceneDataDescriptorLayout{};
 
     std::vector<std::shared_ptr<MeshAsset>> testMeshes;
 
-    AllocatedImage whiteImage;
-    AllocatedImage blackImage;
-    AllocatedImage greyImage;
-    AllocatedImage errorCheckerboardImage;
+    AllocatedImage whiteImage{};
+    AllocatedImage blackImage{};
+    AllocatedImage greyImage{};
+    AllocatedImage errorCheckerboardImage{};
 
-    VkSampler defaultSamplerLinear;
-    VkSampler defaultSamplerNearest;
+    VkSampler defaultSamplerLinear{};
+    VkSampler defaultSamplerNearest{};
 
-    VkDescriptorSetLayout singleImageDescriptorLayout;
+    VkDescriptorSetLayout singleImageDescriptorLayout{};
 
-    MaterialInstance defaultData;
+    MaterialInstance defaultData{};
     GLTFMetallic_Roughness metalRoughMaterial;
 
     DrawContext mainDrawContext;
@@ -245,6 +251,8 @@ public:
     void destroyImage(const AllocatedImage& image);
 
 private:
+    WindowEventQueue* windowEventQueue = nullptr;
+
     void initVulkan();
 
     void createSwapchain(uint32_t width, uint32_t height);

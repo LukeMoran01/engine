@@ -18,16 +18,16 @@
 #include <vulkan/vk_enum_string_helper.h>
 #include <vk_mem_alloc.h>
 
-#include <fmt/core.h>
-
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
+#define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE
+#include "spdlog/spdlog.h"
 
 #define VK_CHECK(x)                                                     \
     do {                                                                \
         VkResult err = x;                                               \
         if (err) {                                                      \
-            fmt::print("Detected Vulkan error: {}", string_VkResult(err)); \
+            spdlog::error("Detected Vulkan error: {}", string_VkResult(err)); \
             abort();                                                    \
         }                                                               \
     } while (0)
