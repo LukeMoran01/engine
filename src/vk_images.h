@@ -8,7 +8,7 @@
 #include "vk_engine.h"
 #include "fastgltf/types.hpp"
 
-std::optional<AllocatedImage> loadImage(VulkanEngine* engine, fastgltf::Asset& asset, fastgltf::Image& image);
+std::optional<AllocatedImage> loadImage(VulkanRenderer* engine, fastgltf::Asset& asset, fastgltf::Image& image);
 
 namespace vkutil {
     void transitionImage(VkCommandBuffer buffer, VkImage image, VkImageLayout currentLayout, VkImageLayout newLayout);

@@ -8,7 +8,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-std::optional<AllocatedImage> loadImage(VulkanEngine* engine, fastgltf::Asset& asset, fastgltf::Image& image) {
+std::optional<AllocatedImage> loadImage(VulkanRenderer* engine, fastgltf::Asset& asset, fastgltf::Image& image) {
     AllocatedImage newImage{};
 
     int width, height, nrChannels;

@@ -90,7 +90,7 @@ struct GLTFMetallic_Roughness {
 
     DescriptorWriter writer;
 
-    void buildPipelines(VulkanEngine* engine);
+    void buildPipelines(VulkanRenderer* engine);
     void clearResources(VkDevice device) const;
 
     MaterialInstance writeMaterial(VkDevice device, MaterialPass pass, const MaterialResources& resources,
@@ -104,7 +104,7 @@ struct RenderObject {
     VkBuffer indexBuffer;
 
     MaterialInstance* material;
-
+    Bounds bounds;
     glm::mat4 transform;
     VkDeviceAddress vertexBufferAddress;
 };
@@ -120,6 +120,10 @@ struct MeshNode : Node {
     void Draw(const glm::mat4& topMatrix, DrawContext& ctx) override;
 };
 
+// struct PrimitiveNode : Node {
+//     void Draw(const glm::mat4& topMatrix, DrawContext& ctx) override;
+// };
+
 struct EngineStats {
     float frameTime;
     int triangleCount;
@@ -130,7 +134,7 @@ struct EngineStats {
 
 constexpr unsigned int MAX_FRAMES_IN_FLIGHT = 2;
 
-class VulkanEngine {
+class VulkanRenderer {
 public:
     EngineStats stats;
 
@@ -164,7 +168,7 @@ public:
 
     AllocatedImage drawImage{nullptr};
     AllocatedImage depthImage{nullptr};
-    VkExtent2D drawExtent{};
+    VkExtent2D drawExtent{1, 1};
 
     std::array<FrameData, MAX_FRAMES_IN_FLIGHT> frames;
     FrameData& getCurrentFrame() { return frames[frameNumber % MAX_FRAMES_IN_FLIGHT]; }
@@ -211,7 +215,7 @@ public:
     std::unordered_map<std::string, std::shared_ptr<Node>> loadedNodes;;
     std::unordered_map<std::string, std::shared_ptr<LoadedGLTF>> loadedScenes;
 
-    static VulkanEngine& Get();
+    static VulkanRenderer& Get();
 
     //initializes everything in the engine
     void init();

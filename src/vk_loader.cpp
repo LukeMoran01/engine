@@ -26,7 +26,7 @@ VkFilter extractFilter(fastgltf::Filter filter);
 VkSamplerMipmapMode extractMipmapMode(fastgltf::Filter filter);
 
 // Single mesh loading function
-std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngine* engine,
+std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanRenderer* engine,
                                                                       const std::filesystem::path& filePath) {
     auto expData = fastgltf::GltfDataBuffer::FromPath(filePath);
     if (!expData) {
@@ -128,7 +128,7 @@ std::optional<std::vector<std::shared_ptr<MeshAsset>>> loadGltfMeshes(VulkanEngi
     return meshes;
 }
 
-std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanEngine* engine, std::string_view filePath) {
+std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanRenderer* engine, std::string_view filePath) {
     fmt::print("Loading GLTF: {}", filePath);
 
     std::shared_ptr<LoadedGLTF> scene = std::make_shared<LoadedGLTF>();
@@ -323,6 +323,18 @@ std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanEngine* engine, std::s
             } else {
                 newSurface.material = materials[0];
             }
+
+            glm::vec3 minPos = vertices[initialVtx].position;
+            glm::vec3 maxPos = vertices[initialVtx].position;
+            for (int i = initialVtx; i < vertices.size(); i++) {
+                minPos = glm::min(minPos, vertices[i].position);
+                minPos = glm::max(minPos, vertices[i].position);
+            }
+
+            newSurface.bounds.origin       = (maxPos + minPos) / 2.f;
+            newSurface.bounds.extents      = (maxPos - minPos) / 2.f;
+            newSurface.bounds.sphereRadius = glm::length(newSurface.bounds.extents);
+
             newMesh->surfaces.push_back(newSurface);
         }
         newMesh->meshBuffers = engine->uploadMesh(indices, vertices);
@@ -346,7 +358,6 @@ std::optional<std::shared_ptr<LoadedGLTF>> loadGltf(VulkanEngine* engine, std::s
                            memcpy(&newNode->localTransform, matrix.data(), sizeof(matrix));
                        },
                        [&](fastgltf::TRS transform) {
-                           // TODO if issue recheck
                            glm::vec3 tl(transform.translation[0], transform.translation[1], transform.translation[2]);
                            glm::quat rot(transform.rotation[3], transform.rotation[0], transform.rotation[1],
                                          transform.rotation[2]);
