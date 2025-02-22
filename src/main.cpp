@@ -1,7 +1,17 @@
 #include <vk_engine.h>
 
+#include "engine.h"
+
 int main(int argc, char* argv[]) {
-    VulkanEngine engine;
+    // Engine newEngine{};
+    // newEngine.init();
+    // while (!newEngine.input.quitEvent) {
+    //     newEngine.update();
+    // }
+    // newEngine.cleanup();
+
+
+    VulkanRenderer engine;
     engine.init();
     engine.run();
     engine.cleanup();

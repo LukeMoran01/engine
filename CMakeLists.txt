@@ -38,10 +38,17 @@ add_executable(${PROJECT_NAME}
         src/vk_loader.h
         src/camera.h
         src/camera.cpp
+        src/game.h
+        src/engine.h
+        src/engine.cpp
+        src/input_handler.h
+        src/input_handler.cpp
+        src/event_queue.h
         # Add other source files here
 )
 add_subdirectory(external/fmt)
 add_subdirectory(external/vk-bootstrap)
+add_subdirectory(external/JoltPhysics/Build)
 
 if (WIN32)
     # Add SDL3.dll to output directory
@@ -75,6 +82,7 @@ target_include_directories(imgui_lib PUBLIC
 target_link_libraries(imgui_lib PUBLIC
         Vulkan::Vulkan
         ${SDL3_LIBRARY}
+        Jolt
 )
 
 # Link SDL3
