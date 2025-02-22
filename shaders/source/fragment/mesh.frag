@@ -16,5 +16,6 @@ void main() {
     vec3 ambient = color * sceneData.ambientColor.xyz;
 
     outFragColor = vec4(color * lightValue * sceneData.sunlightColor.w + ambient, 1.0f);
+    //    outFragColor = vec4(gl_FragCoord.zzz, 1.0);
 }
 
